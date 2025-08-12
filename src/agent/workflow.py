@@ -27,6 +27,7 @@ class FormAgentWorkflow:
         # Add nodes
         workflow.add_node("analyze_query", self.analyze_query)
         workflow.add_node("ask_clarification", self.ask_clarification)
+        workflow.add_node("user_input", self.user_input)
         workflow.add_node("get_database_context", self.get_database_context)
         workflow.add_node("generate_changes", self.generate_changes)
         workflow.add_node("validate_changes", self.validate_changes)
@@ -44,7 +45,8 @@ class FormAgentWorkflow:
             }
         )
         
-        workflow.add_edge("ask_clarification", "analyze_query")
+        workflow.add_edge("ask_clarification", "user_input")
+        workflow.add_edge("user_input", "analyze_query")
         
         workflow.add_edge("get_database_context", "generate_changes")
         
@@ -109,23 +111,50 @@ class FormAgentWorkflow:
         return state
     
     def ask_clarification(self, state: AgentState) -> AgentState:
-        """Ask clarification questions and get user response"""
+        """Ask clarification questions and prepare for user input"""
         self.logger.info("Asking for clarification")
         
         if state.parsed_query and state.parsed_query.clarification_questions:
             self.logger.info(f"Clarification questions: {state.parsed_query.clarification_questions}")
             
-            # Store the clarification questions
-            state.clarification_history.extend(state.parsed_query.clarification_questions)
+            # Store the clarification questions in state for user_input node
+            state.pending_clarification_questions = state.parsed_query.clarification_questions
+            state.needs_user_input = True
+        
+        return state
+    
+    def user_input(self, state: AgentState) -> AgentState:
+        """Handle user input for clarification"""
+        self.logger.info("Waiting for user input")
+        
+        if state.pending_clarification_questions:
+            # Display clarification questions and get user response
+            print("❓ I need more information:")
+            for question in state.pending_clarification_questions:
+                print(f"   • {question}")
+            print()
             
-            # In a real interactive system, this would pause and wait for user input
-            # For now, we'll append the clarification info to the original query
-            clarification_context = " ".join(state.clarification_history)
-            state.user_query = f"{state.user_query} Additional context: {clarification_context}"
-            
-            # Reset parsed query to force re-analysis
-            state.parsed_query = None
-            state.next_action = "analyze_query"
+            try:
+                clarification_response = input("Please provide the additional information: ").strip()
+                if clarification_response:
+                    # Append clarification to original query
+                    state.user_query = f"{state.user_query} Additional context: {clarification_response}"
+                    
+                    # Clear clarification state
+                    state.pending_clarification_questions = []
+                    state.needs_user_input = False
+                    
+                    # Reset parsed query to force re-analysis
+                    state.parsed_query = None
+                    
+                    self.logger.info(f"User provided clarification: {clarification_response}")
+                else:
+                    self.logger.warning("No clarification provided by user")
+                    # Could set an error state here
+                    
+            except KeyboardInterrupt:
+                self.logger.info("User cancelled clarification")
+                state.needs_user_input = False
         
         return state
     
@@ -244,3 +273,4 @@ class FormAgentWorkflow:
             return {
                 "error": f"Workflow error: {str(e)}"
             }
+    

@@ -74,3 +74,5 @@ class AgentState(BaseModel):
     validation_errors: List[str] = Field(default_factory=list)
     final_output: Optional[Dict[str, Any]] = None
     next_action: str = "analyze_query"
+    pending_clarification_questions: List[str] = Field(default_factory=list)
+    needs_user_input: bool = False
