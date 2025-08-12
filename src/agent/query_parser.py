@@ -121,25 +121,47 @@ Response:
         """Parse a natural language query into structured format"""
         
         self.logger.info("Parsing natural language query")
-        self.logger.debug(f"Query: {query}")
+        self.logger.info(f"Input query: {query}")
         
         # Add database context if available
         context_str = ""
         if context and 'available_forms' in context:
             context_str = f"\nAvailable forms in database: {', '.join(context['available_forms'])}"
-            self.logger.debug(f"Added context: {context_str}")
+            self.logger.info(f"Added context: {context_str}")
+        
+        # Prepare the full query that will be sent to LLM
+        full_query = query + context_str
+        self.logger.info(f"Full query sent to LLM: {full_query}")
         
         prompt = self.system_prompt.partial(
             format_instructions=self.parser.get_format_instructions()
         )
         
+        # Log the prompt template being used
+        self.logger.debug(f"Using prompt template with format instructions")
+        
         chain = prompt | self.llm | self.parser
         
         try:
-            result = chain.invoke({"query": query + context_str})
-            parsed_query = ParsedQuery(**result)
-            self.logger.info(f"Successfully parsed query with intent: {parsed_query.intent}")
-            self.logger.debug(f"Parsed query details: {parsed_query}")
+            # First get the raw LLM response before parsing
+            llm_chain = prompt | self.llm
+            raw_response = llm_chain.invoke({"query": full_query})
+            self.logger.info(f"Raw LLM response: {raw_response.content}")
+            
+            # Now parse the response
+            parsed_result = self.parser.invoke(raw_response)
+            self.logger.info(f"Parsed JSON result: {parsed_result}")
+            
+            parsed_query = ParsedQuery(**parsed_result)
+            self.logger.info(f"Successfully created ParsedQuery with intent: {parsed_query.intent}")
+            self.logger.info(f"Form identifier: {parsed_query.form_identifier}")
+            self.logger.info(f"Field code: {parsed_query.field_code}")
+            self.logger.info(f"Target entities: {parsed_query.target_entities}")
+            self.logger.info(f"Confidence: {parsed_query.confidence}")
+            self.logger.info(f"Needs clarification: {parsed_query.needs_clarification}")
+            if parsed_query.clarification_questions:
+                self.logger.info(f"Clarification questions: {parsed_query.clarification_questions}")
+            
             return parsed_query
         except Exception as e:
             self.logger.error(f"Error parsing query: {e}")
@@ -154,12 +176,14 @@ Response:
     def get_database_context(self, parsed_query: ParsedQuery) -> Dict[str, Any]:
         """Get relevant database context for the parsed query"""
         self.logger.info("Getting database context for parsed query")
+        self.logger.error(f"DEBUG: parsed_query.field_code = {parsed_query.field_code}")
         context = {}
         
         # Get form information if form identifier is provided
         if parsed_query.form_identifier:
             self.logger.debug(f"Looking for form: {parsed_query.form_identifier}")
-            form = self.db.find_form_by_identifier(parsed_query.form_identifier)
+            form_result = self.db.find_form_by_identifier(parsed_query.form_identifier, include_similar=True)
+            form = form_result['exact_match']
             if form:
                 self.logger.info(f"Found form: {form['title']}")
                 context['form'] = form
@@ -168,19 +192,25 @@ Response:
                 
                 # Get field-specific context
                 if parsed_query.field_code:
+                    self.logger.error(f"DEBUG: Looking for field_code: {parsed_query.field_code}")
+                    self.logger.error(f"DEBUG: Available fields: {[f['code'] for f in context['form_fields']]}")
                     field_info = next(
                         (f for f in context['form_fields'] if f['code'] == parsed_query.field_code),
                         None
                     )
                     if field_info:
-                        self.logger.debug(f"Found target field: {field_info['code']}")
+                        self.logger.error(f"DEBUG: Found target field: {field_info['code']}")
                         context['target_field'] = field_info
                         if field_info.get('has_options'):
                             context['field_options'] = self.db.get_field_options(field_info['id'])
+                    else:
+                        self.logger.error(f"DEBUG: Field '{parsed_query.field_code}' not found in form fields")
+                else:
+                    self.logger.error("DEBUG: No field_code to look up")
             else:
                 self.logger.warning(f"Form not found: {parsed_query.form_identifier}")
-                # Search for similar forms
-                context['similar_forms'] = self.db.search_forms(parsed_query.form_identifier)
+                # Use semantic search results
+                context['similar_forms'] = form_result['similar_matches']
         
         self.logger.debug(f"Database context keys: {list(context.keys())}")
         return context
@@ -194,7 +224,7 @@ Response:
             if context['similar_forms']:
                 form_names = [f['title'] for f in context['similar_forms']]
                 parsed_query.clarification_questions.append(
-                    f"I found these similar forms: {', '.join(form_names)}. Which one did you mean?"
+                    f"I couldn't find a form called '{parsed_query.form_identifier}'. Did you mean one of these?\n• " + "\n• ".join(form_names)
                 )
             else:
                 parsed_query.clarification_questions.append(

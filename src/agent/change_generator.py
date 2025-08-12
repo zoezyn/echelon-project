@@ -31,16 +31,54 @@ class ChangeGenerator:
     def generate_changes(self, parsed_query: ParsedQuery, context: Dict[str, Any]) -> ChangeSet:
         """Generate database changes based on parsed query and context"""
         
+        self.logger.debug(f"generate_changes called with intent: {parsed_query.intent}")
+        self.logger.debug(f"Context keys: {list(context.keys())}")
+        
         change_set = ChangeSet()
         
-        if parsed_query.intent == QueryIntent.UPDATE_OPTIONS:
-            return self._handle_update_options(parsed_query, context, change_set)
+        if parsed_query.intent == QueryIntent.UPDATE_OPTIONS or parsed_query.intent == QueryIntent.ADD_OPTIONS:
+            self.logger.info("Calling _handle_update_options")
+            try:
+                result = self._handle_update_options(parsed_query, context, change_set)
+                self.logger.debug(f"_handle_update_options returned: {result.to_dict()}")
+                return result
+            except ValueError as e:
+                # Let ValueError (user-facing errors) propagate to show meaningful messages
+                self.logger.error(f"User-facing error in _handle_update_options: {e}")
+                raise e
+            except Exception as e:
+                # Log and re-raise other exceptions
+                self.logger.error(f"Unexpected error in _handle_update_options: {e}")
+                import traceback
+                traceback.print_exc()
+                raise e
         elif parsed_query.intent == QueryIntent.ADD_FIELD:
-            return self._handle_add_field(parsed_query, context, change_set)
+            try:
+                return self._handle_add_field(parsed_query, context, change_set)
+            except ValueError as e:
+                self.logger.error(f"User-facing error in _handle_add_field: {e}")
+                raise e
+            except Exception as e:
+                self.logger.error(f"Unexpected error in _handle_add_field: {e}")
+                raise e
         elif parsed_query.intent == QueryIntent.ADD_LOGIC:
-            return self._handle_add_logic(parsed_query, context, change_set)
+            try:
+                return self._handle_add_logic(parsed_query, context, change_set)
+            except ValueError as e:
+                self.logger.error(f"User-facing error in _handle_add_logic: {e}")
+                raise e
+            except Exception as e:
+                self.logger.error(f"Unexpected error in _handle_add_logic: {e}")
+                raise e
         elif parsed_query.intent == QueryIntent.CREATE_FORM:
-            return self._handle_create_form(parsed_query, context, change_set)
+            try:
+                return self._handle_create_form(parsed_query, context, change_set)
+            except ValueError as e:
+                self.logger.error(f"User-facing error in _handle_create_form: {e}")
+                raise e
+            except Exception as e:
+                self.logger.error(f"Unexpected error in _handle_create_form: {e}")
+                raise e
         else:
             # Use LLM for complex cases
             return self._generate_with_llm(parsed_query, context)
@@ -48,16 +86,24 @@ class ChangeGenerator:
     def _handle_update_options(self, parsed_query: ParsedQuery, context: Dict[str, Any], change_set: ChangeSet) -> ChangeSet:
         """Handle updating dropdown/radio options"""
         
+        self.logger.error(f"DEBUG: Context keys: {list(context.keys())}")
+        self.logger.error(f"DEBUG: Parsed query parameters: {parsed_query.parameters}")
+        
         if not context.get('target_field'):
+            self.logger.error("Target field not found in context")
             raise ValueError("Target field not found in context")
         
         field = context['target_field']
+        self.logger.debug(f"Target field: {field}")
+        
         option_set_id = self.db.get_option_set_by_field_code(context['form']['id'], field['code'])
+        self.logger.debug(f"Option set ID: {option_set_id}")
         
         if not option_set_id:
             raise ValueError(f"No option set found for field {field['code']}")
         
         operations = parsed_query.parameters.get('operations', [])
+        self.logger.debug(f"Operations: {operations}")
         
         for op in operations:
             if op['type'] == 'add':
@@ -75,14 +121,38 @@ class ChangeGenerator:
                 
             elif op['type'] == 'update':
                 # Update existing option
+                self.logger.error(f"DEBUG: Updating option from '{op['from']}' to '{op['to']}'")
+                self.logger.error(f"DEBUG: Option set ID: {option_set_id}")
                 existing_option = self.db.get_existing_option_by_value(option_set_id, op['from'])
+                self.logger.error(f"DEBUG: Found existing option: {existing_option}")
                 if existing_option:
                     updated_option = {
                         "id": existing_option['id'],
                         "value": op['to'].title(),
                         "label": op['to'].title()
                     }
+                    self.logger.error(f"DEBUG: Adding update operation: {updated_option}")
                     change_set.add_update('option_items', updated_option)
+                else:
+                    self.logger.error(f"DEBUG: No existing option found with value '{op['from']}'")
+                    
+                    # Try semantic search for similar options
+                    similar_options = self.db.find_similar_field_options(option_set_id, op['from'])
+                    
+                    if similar_options:
+                        # Found similar options - ask for confirmation
+                        similar_names = [opt['value'] for opt in similar_options]
+                        error_msg = f"I couldn't find an option called '{op['from']}' in the {field['code']} field.\n\nDid you mean one of these similar options?\n• " + "\n• ".join(similar_names)
+                    else:
+                        # No similar options found - show all available options
+                        with self.db.get_connection() as conn:
+                            cursor = conn.cursor()
+                            cursor.execute("SELECT value FROM option_items WHERE option_set_id = ? ORDER BY position", (option_set_id,))
+                            available_options = [row[0] for row in cursor.fetchall()]
+                        
+                        error_msg = f"I couldn't find an option called '{op['from']}' in the {field['code']} field.\n\nThe available options are:\n• " + "\n• ".join(available_options) + f"\n\nDid you mean one of these instead?"
+                    
+                    raise ValueError(error_msg)
         
         return change_set
     

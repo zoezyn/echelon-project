@@ -6,7 +6,7 @@ from typing import List
 # Add src to path
 sys.path.append(os.path.join(os.path.dirname(__file__), 'src'))
 
-from src.agent.chatbot import FormManagementChatbot
+from src.agent.workflow import FormAgentWorkflow
 from langchain_core.messages import HumanMessage, AIMessage, BaseMessage
 
 # Page config
@@ -21,8 +21,8 @@ st.set_page_config(
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
-if "chatbot" not in st.session_state:
-    st.session_state.chatbot = None
+if "agent" not in st.session_state:
+    st.session_state.agent = None
 
 # Sidebar configuration
 st.sidebar.title("⚙️ Configuration")
@@ -35,18 +35,18 @@ model_provider = st.sidebar.selectbox(
     help="Select which AI model to use for processing"
 )
 
-# Initialize chatbot if not exists or provider changed
-if (st.session_state.chatbot is None or 
+# Initialize agent if not exists or provider changed
+if (st.session_state.agent is None or 
     getattr(st.session_state, 'current_provider', None) != model_provider):
     
     try:
         with st.sidebar:
-            with st.spinner("Initializing chatbot..."):
-                st.session_state.chatbot = FormManagementChatbot(model_provider=model_provider)
+            with st.spinner("Initializing agent..."):
+                st.session_state.agent = FormAgentWorkflow(model_provider=model_provider)
                 st.session_state.current_provider = model_provider
-        st.sidebar.success("✅ Chatbot initialized!")
+        st.sidebar.success("✅ Agent initialized!")
     except Exception as e:
-        st.sidebar.error(f"❌ Error initializing chatbot: {str(e)}")
+        st.sidebar.error(f"❌ Error initializing agent: {str(e)}")
         st.sidebar.info("Please check your API keys in the .env file")
 
 # Sidebar info
@@ -91,8 +91,8 @@ with chat_container:
 
 # Chat input
 if prompt := st.chat_input("Describe what you want to do with your forms..."):
-    if st.session_state.chatbot is None:
-        st.error("Please wait for the chatbot to initialize or check your API keys.")
+    if st.session_state.agent is None:
+        st.error("Please wait for the agent to initialize or check your API keys.")
     else:
         # Add user message to chat history
         with st.chat_message("user"):
@@ -102,8 +102,8 @@ if prompt := st.chat_input("Describe what you want to do with your forms..."):
         with st.chat_message("assistant"):
             with st.spinner("Processing your request..."):
                 try:
-                    # Process the message through the chatbot
-                    result = st.session_state.chatbot.process_message(
+                    # Process the message through the agent
+                    result = st.session_state.agent.process_message(
                         prompt, 
                         st.session_state.messages
                     )
@@ -139,7 +139,7 @@ if st.sidebar.checkbox("🐛 Debug Mode", value=False):
         st.json({
             "total_messages": len(st.session_state.messages),
             "model_provider": model_provider,
-            "chatbot_initialized": st.session_state.chatbot is not None
+            "agent_initialized": st.session_state.agent is not None
         })
         
         if st.session_state.messages:

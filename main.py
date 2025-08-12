@@ -16,13 +16,14 @@ sys.path.append(os.path.join(os.path.dirname(__file__), 'src'))
 
 from src.agent.workflow import FormAgentWorkflow
 from src.evaluation.metrics import AgentEvaluator
+from langchain_core.messages import HumanMessage, AIMessage, BaseMessage
 
 class FormAgentCLI:
     def __init__(self, model_provider: str = "openai"):
         """Initialize the Form Agent CLI"""
         self.agent = FormAgentWorkflow(model_provider)
         self.evaluator = AgentEvaluator()
-        self.conversation_history = []
+        self.conversation_history = []  # List of BaseMessage objects
         
     def print_welcome(self):
         """Print welcome message"""
@@ -100,22 +101,50 @@ class FormAgentCLI:
         print("-" * 30)
         
         try:
-            result = self.agent.process_query(user_input)
+            # Process the message using the new method with conversation history
+            result = self.agent.process_message(user_input, self.conversation_history)
             
-            # Add to conversation history
-            self.conversation_history.append({
-                "user_query": user_input,
-                "agent_response": result
-            })
-            
-            return result
+            if result["success"]:
+                # Update conversation history with the new messages
+                self.conversation_history = result["messages"]
+                
+                # Extract the latest AI response for CLI compatibility
+                ai_messages = [msg for msg in result["messages"] if isinstance(msg, AIMessage)]
+                if ai_messages:
+                    latest_response = ai_messages[-1].content
+                    
+                    # Try to parse JSON from the response if it contains JSON
+                    import re
+                    json_match = re.search(r'```json\n(.*?)\n```', latest_response, re.DOTALL)
+                    if json_match:
+                        try:
+                            return json.loads(json_match.group(1))
+                        except:
+                            pass
+                    
+                    # Return as clarification needed or simple message
+                    if "I need more information" in latest_response:
+                        questions = []
+                        for line in latest_response.split('\n'):
+                            if line.strip() and (line.strip()[0].isdigit() or line.strip().startswith('•')):
+                                questions.append(line.strip())
+                        return {
+                            "clarification_needed": True,
+                            "questions": questions
+                        }
+                    else:
+                        return {"message": latest_response}
+                
+                return {"error": "No response generated"}
+            else:
+                return {"error": result.get("error", "Unknown error")}
             
         except Exception as e:
             error_result = {"error": f"An error occurred: {str(e)}"}
-            self.conversation_history.append({
-                "user_query": user_input,
-                "agent_response": error_result
-            })
+            # Add error to conversation history as messages
+            human_msg = HumanMessage(content=user_input)
+            ai_msg = AIMessage(content=f"I'm sorry, I encountered an error: {str(e)}")
+            self.conversation_history.extend([human_msg, ai_msg])
             return error_result
     
     def display_result(self, result: Dict[str, Any]):
