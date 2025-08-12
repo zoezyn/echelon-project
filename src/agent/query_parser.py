@@ -16,7 +16,7 @@ class QueryParser:
         
         if model_provider == "openai":
             self.llm = ChatOpenAI(
-                model="gpt-4o-mini",
+                model="gpt-4o",
                 temperature=0,
                 api_key=os.getenv('OPENAI_API_KEY')
             )
