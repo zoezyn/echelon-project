@@ -210,17 +210,23 @@ class ChangeGenerator:
         
         position = self.db.get_max_position('form_fields', 'form_id', form['id'])
         
+        # Generate contextual placeholder using LLM if not provided
+        field_label = parsed_query.parameters.get('label', parsed_query.field_code.replace('_', ' ').title())
+        default_placeholder = None
+        if not parsed_query.parameters.get('placeholder'):
+            default_placeholder = self._generate_placeholder_with_llm(type_id, field_label, form['title'])
+        
         new_field = {
             "id": f"$fld_{parsed_query.field_code}",
             "form_id": form['id'],
             "page_id": page_id,
             "type_id": type_id,
             "code": parsed_query.field_code,
-            "label": parsed_query.parameters.get('label', parsed_query.field_code.replace('_', ' ').title()),
+            "label": field_label,
             "position": position,
             "required": 1 if parsed_query.parameters.get('required', False) else 0,
             "read_only": 0,
-            "placeholder": parsed_query.parameters.get('placeholder'),
+            "placeholder": parsed_query.parameters.get('placeholder') or default_placeholder,
             "visible_by_default": parsed_query.parameters.get('visible_by_default', 0)
         }
         
@@ -429,6 +435,67 @@ class ChangeGenerator:
             change_set = self._handle_add_field(field_query, field_context, change_set)
         
         return change_set
+    
+    def _generate_placeholder_with_llm(self, type_id: int, field_label: str, form_title: str) -> str:
+        """Generate contextual placeholder text using LLM"""
+        
+        # Field type mapping for context
+        field_types = {
+            1: "short text input",
+            2: "long text area", 
+            3: "dropdown selection",
+            4: "radio button selection",
+            5: "checkbox selection",
+            6: "tags input",
+            7: "date picker",
+            8: "number input",
+            9: "file upload",
+            10: "email input"
+        }
+        
+        field_type_name = field_types.get(type_id, "text input")
+        
+        prompt = ChatPromptTemplate.from_messages([
+            ("system", """You are a UX expert specializing in form design. Generate helpful, concise placeholder text for form fields.
+
+Guidelines:
+- Keep placeholders short and actionable (under 50 characters)
+- Use specific examples when helpful (e.g., "john@company.com" for email)
+- Match the tone and context of the form
+- For selection fields, use "Select..." or "Choose..." format
+- For text inputs, provide examples or clear instructions
+- Be contextually relevant to the form's purpose"""),
+            ("user", """Generate a placeholder for this form field:
+
+Field Type: {field_type}
+Field Label: {field_label}  
+Form Title: {form_title}
+
+Return only the placeholder text, no quotes or extra formatting.""")
+        ])
+        
+        chain = prompt | self.llm
+        
+        try:
+            response = chain.invoke({
+                "field_type": field_type_name,
+                "field_label": field_label,
+                "form_title": form_title
+            })
+            
+            placeholder = response.content.strip()
+            # Remove quotes if LLM added them
+            if placeholder.startswith('"') and placeholder.endswith('"'):
+                placeholder = placeholder[1:-1]
+            if placeholder.startswith("'") and placeholder.endswith("'"):
+                placeholder = placeholder[1:-1]
+                
+            return placeholder[:100]  # Ensure reasonable length
+            
+        except Exception as e:
+            self.logger.error(f"Error generating placeholder with LLM: {e}")
+            # Fallback to simple default
+            return f"Enter {field_label.lower()}"
     
     def _generate_with_llm(self, parsed_query: ParsedQuery, context: Dict[str, Any]) -> ChangeSet:
         """Use LLM to generate complex changes"""
