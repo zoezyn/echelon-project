@@ -224,7 +224,7 @@ Rules:
 1. Only update fields that the user clarification addresses
 2. Keep the original intent unless explicitly changed
 3. Set needs_clarification to false after incorporating clarification
-4. Clear clarification_questions after update
+4. Clear clarification_questions after update, unless the instruction is not clear and you need to ask more clarification questions.
 5. Maintain the same confidence level unless you're certain about the correction
 6. Return the complete updated ParsedQuery as JSON
 

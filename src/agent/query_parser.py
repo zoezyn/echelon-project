@@ -48,7 +48,7 @@ Available query intents:
 - UPDATE_LOGIC: Modifying existing logic rules
 - DELETE_LOGIC: Removing logic rules
 
-- UNKNOWN: Query intent unclear
+- UNKNOWN: Query intent unclear - ask for clarification
 
 Form context database tables:
 - forms: id, slug, title, description, status, category_id
@@ -112,7 +112,19 @@ Response:
   "needs_clarification": true,
   "clarification_questions": ["What fields should be included in the snack request form?", "Should this form have multiple pages?"]
 }}
-
+             
+Query: "How is the weather?"
+{{
+  "intent": "unknown",
+  "form_identifier": null,
+  "field_code": null,
+  "target_entities": [],
+  "parameters": {{}},
+  "confidence": 0.9,
+  "needs_clarification": true,
+  "clarification_questions": ["I couldn't answer your question. Could you please rephrase what you'd like to do with the form?"]
+}}
+             
 {format_instructions}"""),
             ("user", "{query}")
         ])
