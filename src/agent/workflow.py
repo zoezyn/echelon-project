@@ -30,6 +30,7 @@ class FormAgentWorkflow:
         
         # Add nodes
         workflow.add_node("analyze_query", self.analyze_query)
+        workflow.add_node("replan", self.replan)
         # workflow.add_node("validate_guardrails", self.validate_guardrails)
         workflow.add_node("ask_clarification", self.ask_clarification)
         workflow.add_node("get_database_context", self.get_database_context)
@@ -58,14 +59,24 @@ class FormAgentWorkflow:
             }
         )
         
-        # After clarification, go back to where it came from
+        # After clarification, go to replan or back to original source
         workflow.add_conditional_edges(
             "ask_clarification",
             self._clarification_router,
             {
-                "analyze_query": "analyze_query",
-                "generate_changes": "generate_changes",
-                "default": "analyze_query"
+                "replan": "replan",
+                "generate_changes": "generate_changes", 
+                "default": "replan"
+            }
+        )
+        
+        # From replan, either ask for more clarification or continue to get_database_context
+        workflow.add_conditional_edges(
+            "replan",
+            self._should_clarify,
+            {
+                "clarify": "ask_clarification",
+                "continue": "get_database_context"
             }
         )
         
@@ -149,9 +160,146 @@ Please analyze this current request in the context of the previous conversation.
         state["needs_clarification"] = parsed_query.needs_clarification
         state["clarification_questions"] = parsed_query.clarification_questions
         
+        # Set clarification source for routing decisions
+        if parsed_query.needs_clarification:
+            state["clarification_source"] = "analyze_query"
+        
         self.logger.info(f"Parsed intent: {parsed_query.intent}")
         
         return state
+    
+    def replan(self, state: ChatState) -> ChatState:
+        """Replan and update ParsedQuery based on user clarification response"""
+        self.logger.info("Replanning based on user clarification")
+        
+        if not state.get("parsed_query"):
+            self.logger.error("No parsed query found in state for replanning")
+            return state
+        
+        # Get the last human message (user's clarification response)
+        human_messages = [msg for msg in state["messages"] if isinstance(msg, HumanMessage)]
+        if len(human_messages) < 2:  # Need at least original query + clarification response
+            self.logger.error("Not enough human messages for replanning")
+            return state
+        
+        user_clarification = human_messages[-1].content.strip()
+        original_parsed_query = state["parsed_query"]
+        
+        self.logger.info(f"User clarification: {user_clarification}")
+        self.logger.info(f"Original parsed query intent: {original_parsed_query.intent}")
+        
+        # Use LLM to update the ParsedQuery based on user clarification
+        self._update_parsed_query_with_llm(state, user_clarification)
+        
+        return state
+    
+    def _update_parsed_query_with_llm(self, state: ChatState, user_clarification: str) -> None:
+        """Use LLM to update the ParsedQuery based on user clarification"""
+        from langchain_core.prompts import ChatPromptTemplate
+        from langchain_core.output_parsers import JsonOutputParser
+        from ..utils.models import ParsedQuery
+        
+        original_parsed_query = state["parsed_query"]
+        clarification_questions = state.get("clarification_questions", [])
+        
+        self.logger.info("Using LLM to update ParsedQuery based on clarification")
+        
+        # Create a simple prompt to update the ParsedQuery
+        update_prompt = ChatPromptTemplate.from_messages([
+            ("system", """You are an expert at updating ParsedQuery objects based on user clarifications.
+
+Given the original ParsedQuery and user clarification, update ONLY the fields that need to be changed based on the user's input.
+
+Original ParsedQuery structure:
+- intent: The operation intent (keep unchanged unless user explicitly changes it)
+- form_identifier: Form name/slug/title
+- field_code: Field code/name
+- target_entities: List of entities involved
+- parameters: Operation parameters
+- confidence: Confidence level
+- needs_clarification: Whether clarification is needed
+- clarification_questions: List of questions
+
+Rules:
+1. Only update fields that the user clarification addresses
+2. Keep the original intent unless explicitly changed
+3. Set needs_clarification to false after incorporating clarification
+4. Clear clarification_questions after update
+5. Maintain the same confidence level unless you're certain about the correction
+6. Return the complete updated ParsedQuery as JSON
+
+Format the response as a valid ParsedQuery JSON object."""),
+            ("user", """Original ParsedQuery:
+{original_query}
+
+Clarification Questions that were asked:
+{clarification_questions}
+
+User's clarification response:
+{user_clarification}
+
+Please update the ParsedQuery to incorporate the user's clarification:""")
+        ])
+
+        parser = JsonOutputParser(pydantic_object=ParsedQuery)
+        
+        # Use the query parser's LLM since FormAgentWorkflow doesn't have its own
+        llm = self.query_parser.llm
+        chain = update_prompt | llm | parser
+
+        try:
+            invoke_params = {
+                "original_query": original_parsed_query.model_dump(),
+                "clarification_questions": clarification_questions,
+                "user_clarification": user_clarification
+            }
+            self.logger.info(f"Chain invoke parameters: {invoke_params}")
+            
+            self.logger.info("📞 Calling chain.invoke() now...")
+            updated_query = chain.invoke(invoke_params)
+            self.logger.info("📞 chain.invoke() completed!")
+            
+            self.logger.info(f"LLM returned: {updated_query}")
+            self.logger.info(f"LLM response type: {type(updated_query)}")
+            
+            # Convert back to ParsedQuery object
+            if isinstance(updated_query, dict):
+                self.logger.info("Converting dict to ParsedQuery object")
+                updated_parsed_query = ParsedQuery(**updated_query)
+            else:
+                self.logger.info("Using ParsedQuery object directly")
+                updated_parsed_query = updated_query
+            
+            self.logger.info(f"Converted ParsedQuery: {updated_parsed_query.model_dump()}")
+            
+            # Compare and log only changed attributes
+            original_dict = original_parsed_query.model_dump()
+            updated_dict = updated_parsed_query.model_dump()
+            
+            changes = {}
+            for key, new_value in updated_dict.items():
+                old_value = original_dict.get(key)
+                if old_value != new_value:
+                    changes[key] = {"old": old_value, "new": new_value}
+            
+            # Update the state with the corrected query
+            state["parsed_query"] = updated_parsed_query
+            state["needs_clarification"] = updated_parsed_query.needs_clarification
+            state["clarification_questions"] = updated_parsed_query.clarification_questions
+            
+            if changes:
+                self.logger.info("✅ Successfully updated ParsedQuery with LLM")
+                for key, change in changes.items():
+                    self.logger.info(f"📝 New {key}: {change['old']} → {change['new']}")
+            else:
+                self.logger.info("✅ ParsedQuery processed by LLM (no changes needed)")
+            
+        except Exception as e:
+            self.logger.error(f"Error updating ParsedQuery with LLM: {e}")
+            # Fallback: clear clarification flags to continue workflow
+            state["needs_clarification"] = False
+            state["clarification_questions"] = []
+            self.logger.warning("Fallback: cleared clarification flags to continue workflow")
     
     # def validate_guardrails(self, state: ChatState) -> ChatState:
     #     """Validate query against guardrails"""
@@ -200,6 +348,7 @@ Please analyze this current request in the context of the previous conversation.
             if enhanced_query.needs_clarification:
                 state["needs_clarification"] = True
                 state["clarification_questions"] = enhanced_query.clarification_questions
+                state["clarification_source"] = "get_database_context"
                 self.logger.info("Setting needs_clarification=True due to enhanced query")
             else:
                 self.logger.info("No clarification needed after database context")
@@ -449,15 +598,19 @@ Please analyze this current request in the context of the previous conversation.
         self.logger.info(f"Clarification router called with source: '{source}'")
         self.logger.debug(f"Full state clarification_source: {state.get('clarification_source')}")
         
+        # If clarification came from generate_changes, go back there directly
+        # (these are usually specific value corrections that don't need replanning)
         if source == "generate_changes":
             self.logger.info("Routing back to generate_changes")
             return "generate_changes"
-        elif source == "validate_changes":
-            self.logger.info("Routing back to validate_changes")
-            return "validate_changes"
+        elif source == "get_database_context" or source == "replan" or source == "analyze_query":
+            self.logger.info("Routing back to replan")
+            return "replan"
         else:
-            self.logger.info(f"Unknown clarification source '{source}', routing to default (analyze_query)")
-            return "default"
+            # For analyze_query clarifications or unknown sources, go to replan
+            # This handles field/form name corrections and query refinements
+            self.logger.info(f"Clarification source '{source}', routing to replan")
+            return "replan"
     
     
     def process_query(self, user_query: str) -> Dict[str, Any]:
