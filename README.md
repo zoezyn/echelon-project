@@ -60,6 +60,7 @@ streamlit run streamlit_app.py
 
 ### Deployment
 For quick access, I have also deployed the app. You can access it here: https://appapppy-nihpxegchfs7xpjcd7zvrk.streamlit.app/
+
 Note: the "Clear Chat" button doesn't work fully for the deployed version. You may need to refresh the page when chat history gets longer.
 
 #### Testing Framework
@@ -70,18 +71,9 @@ python -m src.evaluation.test_runner --query "Add option 'PhD' to education fiel
 # Interactive mode
 python -m src.evaluation.test_runner --interactive
 
-
-## Problem Approach & Design Choices
-
-### Architecture Overview
-
-The solution follows a modular pipeline architecture:
-
+```
 ![Workflow Architecture](data/workflow.jpeg)
 
-```
-User Query → Query Parser → Context Gatherer → Change Generator → Validator → Database Changes
-```
 
 ### Key Design Decisions
 
