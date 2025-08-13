@@ -218,8 +218,9 @@ Response:
     def enhance_with_context(self, parsed_query: ParsedQuery, context: Dict[str, Any]) -> ParsedQuery:
         """Enhance parsed query with database context"""
         
-        # If form wasn't found but we have similar forms, flag for clarification
-        if parsed_query.form_identifier and 'similar_forms' in context and not context.get('form'):
+        # If form wasn't found but we have similar forms, flag for clarification (except for CREATE_FORM intent where we're creating new forms)
+        if (parsed_query.form_identifier and 'similar_forms' in context and not context.get('form') and 
+            parsed_query.intent != QueryIntent.CREATE_FORM):
             parsed_query.needs_clarification = True
             if context['similar_forms']:
                 form_names = [f['title'] for f in context['similar_forms']]
@@ -231,8 +232,9 @@ Response:
                     f"I couldn't find a form matching '{parsed_query.form_identifier}'. Could you check the form name?"
                 )
         
-        # If field wasn't found, flag for clarification
-        if parsed_query.field_code and context.get('form') and not context.get('target_field'):
+        # If field wasn't found, flag for clarification (except for ADD_LOGIC intent where we're creating new fields)
+        if (parsed_query.field_code and context.get('form') and not context.get('target_field') and 
+            parsed_query.intent != QueryIntent.ADD_LOGIC):
             available_fields = [f['code'] for f in context.get('form_fields', [])]
             parsed_query.needs_clarification = True
             parsed_query.clarification_questions.append(

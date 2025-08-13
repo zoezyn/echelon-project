@@ -153,6 +153,40 @@ class ChangeGenerator:
                         error_msg = f"I couldn't find an option called '{op['from']}' in the {field['code']} field.\n\nThe available options are:\n• " + "\n• ".join(available_options) + f"\n\nDid you mean one of these instead?"
                     
                     raise ValueError(error_msg)
+                    
+            elif op['type'] == 'delete':
+                # Delete existing option
+                self.logger.debug(f"Deleting option '{op['value']}'")
+                self.logger.debug(f"Option set ID: {option_set_id}")
+                existing_option = self.db.get_existing_option_by_value(option_set_id, op['value'])
+                self.logger.debug(f"Found existing option to delete: {existing_option}")
+                
+                if existing_option:
+                    delete_option = {
+                        "id": existing_option['id']
+                    }
+                    self.logger.debug(f"Adding delete operation: {delete_option}")
+                    change_set.add_delete('option_items', delete_option)
+                else:
+                    self.logger.debug(f"No existing option found with value '{op['value']}'")
+                    
+                    # Try semantic search for similar options
+                    similar_options = self.db.find_similar_field_options(option_set_id, op['value'])
+                    
+                    if similar_options:
+                        # Found similar options - ask for confirmation
+                        similar_names = [opt['value'] for opt in similar_options]
+                        error_msg = f"I couldn't find an option called '{op['value']}' in the {field['code']} field.\n\nDid you mean one of these similar options?\n• " + "\n• ".join(similar_names)
+                    else:
+                        # No similar options found - show all available options
+                        with self.db.get_connection() as conn:
+                            cursor = conn.cursor()
+                            cursor.execute("SELECT value FROM option_items WHERE option_set_id = ? ORDER BY position", (option_set_id,))
+                            available_options = [row[0] for row in cursor.fetchall()]
+                        
+                        error_msg = f"I couldn't find an option called '{op['value']}' in the {field['code']} field.\n\nThe available options are:\n• " + "\n• ".join(available_options) + f"\n\nDid you mean one of these instead?"
+                    
+                    raise ValueError(error_msg)
         
         return change_set
     
@@ -214,6 +248,37 @@ class ChangeGenerator:
         if not condition_field_info:
             raise ValueError(f"Condition field '{condition_field}' not found")
         
+        # Check if target field exists, create if it doesn't
+        target_field_info = next(
+            (f for f in context.get('form_fields', []) if f['code'] == target_field),
+            None
+        )
+        
+        if not target_field_info:
+            # Create the new field using existing _handle_add_field method
+            field_type = parsed_query.parameters.get('field_type', 'short_text')
+            
+            # Create a temporary parsed query for field creation
+            from ..utils.models import ParsedQuery, QueryIntent
+            field_query = ParsedQuery(
+                intent=QueryIntent.ADD_FIELD,
+                form_identifier=parsed_query.form_identifier,
+                field_code=target_field,
+                parameters={
+                    'field_type': field_type,
+                    'field_label': target_field.replace('_', ' ').title(),
+                    'required': False
+                }
+            )
+            
+            # Use existing method to create the field
+            change_set = self._handle_add_field(field_query, context, change_set)
+            target_field_id = f"$fld_{target_field}"
+            self.logger.info(f"Creating new field '{target_field}' with type '{field_type}' using _handle_add_field")
+        else:
+            target_field_id = target_field_info['id']
+            self.logger.info(f"Using existing field '{target_field}' with id '{target_field_id}'")
+        
         # Create logic rule
         rule_id = f"$rule_{target_field}_{action}"
         logic_rule = {
@@ -246,7 +311,7 @@ class ChangeGenerator:
                 "id": f"$act_show_{target_field}",
                 "rule_id": rule_id,
                 "action": "show",
-                "target_ref": json.dumps({"type": "field", "field_id": f"$fld_{target_field}"}),
+                "target_ref": json.dumps({"type": "field", "field_id": target_field_id}),
                 "params": None,
                 "position": 1
             }
@@ -257,7 +322,7 @@ class ChangeGenerator:
                 "id": f"$act_require_{target_field}",
                 "rule_id": rule_id,
                 "action": "require",
-                "target_ref": json.dumps({"type": "field", "field_id": f"$fld_{target_field}"}),
+                "target_ref": json.dumps({"type": "field", "field_id": target_field_id}),
                 "params": None,
                 "position": 2
             }
@@ -292,54 +357,37 @@ class ChangeGenerator:
         }
         change_set.add_insert('form_pages', new_page)
         
-        # Add fields if specified
+        # Add fields if specified using existing _handle_add_field method
         fields = parsed_query.parameters.get('fields', [])
         for i, field_info in enumerate(fields):
-            field_id = f"$fld_{field_info['code']}"
-            type_id = self.db.get_field_type_id(field_info.get('type', 'short_text')) or 1
+            # Create a temporary parsed query for each field
+            from ..utils.models import ParsedQuery, QueryIntent
             
-            new_field = {
-                "id": field_id,
-                "form_id": form_id,
-                "page_id": page_id,
-                "type_id": type_id,
-                "code": field_info['code'],
-                "label": field_info.get('label', field_info['code'].replace('_', ' ').title()),
-                "position": i + 1,
-                "required": field_info.get('required', 0),
-                "read_only": 0,
-                "visible_by_default": 1
+            # Extract field details from whatever structure we have
+            field_name = field_info.get('name') or field_info.get('label') or f"field_{i+1}"
+            field_type = field_info.get('type', 'short_text')
+            field_options = field_info.get('options', [])
+            
+            field_query = ParsedQuery(
+                intent=QueryIntent.ADD_FIELD,
+                form_identifier=parsed_query.form_identifier,
+                field_code=field_name.lower().replace(' ', '_').replace('-', '_'),
+                parameters={
+                    'field_type': field_type,
+                    'field_label': field_name.replace('_', ' ').title(),
+                    'required': field_info.get('required', False),
+                    'options': field_options if field_options else None
+                }
+            )
+            
+            # Create a context with the form we just created
+            field_context = {
+                'form': {'id': form_id, 'title': form_title},
+                'form_pages': [{'id': page_id}]
             }
-            change_set.add_insert('form_fields', new_field)
             
-            # Add option set if needed
-            if field_info.get('options'):
-                option_set_id = f"$opt_set_{field_info['code']}"
-                option_set = {
-                    "id": option_set_id,
-                    "form_id": form_id,
-                    "name": f"{field_info['label']} Options"
-                }
-                change_set.add_insert('option_sets', option_set)
-                
-                # Add option items
-                for j, option in enumerate(field_info['options']):
-                    option_item = {
-                        "id": f"$opt_{field_info['code']}_{j}",
-                        "option_set_id": option_set_id,
-                        "value": option,
-                        "label": option,
-                        "position": j + 1,
-                        "is_active": 1
-                    }
-                    change_set.add_insert('option_items', option_item)
-                
-                # Bind field to option set
-                binding = {
-                    "field_id": field_id,
-                    "option_set_id": option_set_id
-                }
-                change_set.add_insert('field_option_binding', binding)
+            # Use existing method to create the field
+            change_set = self._handle_add_field(field_query, field_context, change_set)
         
         return change_set
     
