@@ -218,10 +218,10 @@ class ChangeGenerator:
             "code": parsed_query.field_code,
             "label": parsed_query.parameters.get('label', parsed_query.field_code.replace('_', ' ').title()),
             "position": position,
-            "required": parsed_query.parameters.get('required', 0),
+            "required": 1 if parsed_query.parameters.get('required', False) else 0,
             "read_only": 0,
             "placeholder": parsed_query.parameters.get('placeholder'),
-            "visible_by_default": parsed_query.parameters.get('visible_by_default', 1)
+            "visible_by_default": parsed_query.parameters.get('visible_by_default', 0)
         }
         
         change_set.add_insert('form_fields', new_field)
@@ -267,7 +267,7 @@ class ChangeGenerator:
                 parameters={
                     'field_type': field_type,
                     'field_label': target_field.replace('_', ' ').title(),
-                    'required': False
+                    'required': 0
                 }
             )
             
@@ -375,7 +375,7 @@ class ChangeGenerator:
                 parameters={
                     'field_type': field_type,
                     'field_label': field_name.replace('_', ' ').title(),
-                    'required': field_info.get('required', False),
+                    'required': 1 if field_info.get('required', False) else 0,
                     'options': field_options if field_options else None
                 }
             )

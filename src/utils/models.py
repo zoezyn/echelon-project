@@ -1,6 +1,6 @@
-from typing import Annotated, Dict, List, Any, Optional, Sequence
+from typing import Annotated, Dict, List, Any, Optional, Sequence, Union
 from typing_extensions import TypedDict
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from enum import Enum
 from langgraph.graph.message import add_messages
 from langchain_core.messages import BaseMessage
@@ -79,6 +79,48 @@ class AgentState(BaseModel):
     next_action: str = "analyze_query"
     pending_clarification_questions: List[str] = Field(default_factory=list)
     needs_user_input: bool = False
+
+class FormResponse(BaseModel):
+    """Pydantic model for validating the final JSON output format"""
+    success: bool
+    message: Optional[str] = None
+    changes: Optional[Dict[str, Dict[str, List[Dict[str, Any]]]]] = None
+    
+    @field_validator('changes')
+    @classmethod
+    def validate_changes_structure(cls, v):
+        """Validate that changes follow the expected table->operation->records structure"""
+        if v is None:
+            return v
+        
+        valid_operations = {'insert', 'update', 'delete'}
+        
+        for table_name, operations in v.items():
+            if not isinstance(operations, dict):
+                raise ValueError(f"Operations for table {table_name} must be a dictionary")
+            
+            for op_type, records in operations.items():
+                if op_type not in valid_operations:
+                    raise ValueError(f"Invalid operation type '{op_type}'. Must be one of: {valid_operations}")
+                
+                if not isinstance(records, list):
+                    raise ValueError(f"Records for {table_name}.{op_type} must be a list")
+                
+                for record in records:
+                    if not isinstance(record, dict):
+                        raise ValueError(f"Each record in {table_name}.{op_type} must be a dictionary")
+        
+        return v
+    
+    def to_json_output(self) -> Dict[str, Any]:
+        """Convert to clean JSON output format"""
+        if self.success and self.changes:
+            return self.changes
+        else:
+            return {
+                "error": self.message or "An error occurred",
+                "success": False
+            }
 
 class ChatState(TypedDict):
     """State for chatbot conversations with message history"""

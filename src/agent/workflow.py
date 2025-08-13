@@ -10,7 +10,7 @@ from ..utils.logger import setup_logger
 from .query_parser import QueryParser
 from .change_generator import ChangeGenerator
 from .validator import ChangeValidator
-from ..utils.models import ChatState
+from ..utils.models import ChatState, FormResponse
 
 class FormAgentWorkflow:
     def __init__(self, model_provider: str = "openai"):
@@ -138,6 +138,7 @@ Please analyze this current request in the context of the previous conversation.
         # Get available forms for context
         with self.db.get_connection() as conn:
             cursor = conn.cursor()
+            # TODO: Add slug to the available forms
             cursor.execute("SELECT title FROM forms WHERE status = 'published'")
             available_forms = [row[0] for row in cursor.fetchall()]
         
@@ -313,49 +314,79 @@ Please analyze this current request in the context of the previous conversation.
         return state
     
     def format_response(self, state: ChatState) -> ChatState:
-        """Format the final response"""
+        """Format the final response with Pydantic validation"""
         self.logger.info("Formatting response")
         
-        if state["validation_errors"]:
-            # Error response - check if it's a single natural error message
-            if len(state["validation_errors"]) == 1 and not state["validation_errors"][0].startswith("Error generating changes:"):
-                # Single natural error message - use it directly
-                ai_message = AIMessage(content=state["validation_errors"][0])
-            else:
-                # Multiple errors or technical errors - format them
-                error_text = ""
-                for i, error in enumerate(state["validation_errors"], 1):
-                    # Remove technical prefixes for natural display
-                    clean_error = error
-                    if clean_error.startswith("Error generating changes: "):
-                        clean_error = clean_error[26:]  # Remove "Error generating changes: "
-                    error_text += f"{i}. {clean_error}\n"
-                # error_text += "\nPlease check your request and try again."
+        try:
+            if state["validation_errors"]:
+                # Error response - validate structure
+                error_message = ""
+                if len(state["validation_errors"]) == 1 and not state["validation_errors"][0].startswith("Error generating changes:"):
+                    # Single natural error message - use it directly
+                    error_message = state["validation_errors"][0]
+                else:
+                    # Multiple errors or technical errors - format them
+                    error_text = ""
+                    for i, error in enumerate(state["validation_errors"], 1):
+                        # Remove technical prefixes for natural display
+                        clean_error = error
+                        if clean_error.startswith("Error generating changes: "):
+                            clean_error = clean_error[26:]  # Remove "Error generating changes: "
+                        error_text += f"{i}. {clean_error}\n"
+                    error_message = error_text
                 
-                ai_message = AIMessage(content=error_text)
+                # Create validated error response
+                form_response = FormResponse(
+                    success=False,
+                    message=error_message,
+                    changes=None
+                )
+                
+                ai_message = AIMessage(content=error_message)
+                
+            elif state["change_set"]:
+                # Success response with changes - validate structure
+                changes_dict = state["change_set"].to_dict()
+                
+                # Validate using Pydantic model
+                form_response = FormResponse(
+                    success=True,
+                    message="Database changes generated successfully",
+                    changes=changes_dict
+                )
+                
+                # Create a user-friendly summary
+                summary_text = "✅ I've generated the database changes for your request:\n\n"
+                
+                for table_name, operations in changes_dict.items():
+                    if operations.get('insert'):
+                        summary_text += f"**{table_name}** - Adding {len(operations['insert'])} new record(s)\n"
+                    if operations.get('update'):
+                        summary_text += f"**{table_name}** - Updating {len(operations['update'])} record(s)\n"
+                    if operations.get('delete'):
+                        summary_text += f"**{table_name}** - Deleting {len(operations['delete'])} record(s)\n"
+                
+                summary_text += f"\n**Raw JSON Output:**\n```json\n{json.dumps(changes_dict, indent=2)}\n```"
+                
+                ai_message = AIMessage(content=summary_text)
+                
+            else:
+                # Fallback response
+                form_response = FormResponse(
+                    success=False,
+                    message="I'm sorry, I couldn't process your request. Please try rephrasing your question.",
+                    changes=None
+                )
+                
+                ai_message = AIMessage(content="I'm sorry, I couldn't process your request. Please try rephrasing your question.")
             
-        elif state["change_set"]:
-            # Success response with changes
-            changes_dict = state["change_set"].to_dict()
+            # Store the validated response for potential API usage
+            state["final_output"] = form_response.model_dump()
             
-            # Create a user-friendly summary
-            summary_text = "✅ I've generated the database changes for your request:\n\n"
-            
-            for table_name, operations in changes_dict.items():
-                if operations.get('insert'):
-                    summary_text += f"**{table_name}** - Adding {len(operations['insert'])} new record(s)\n"
-                if operations.get('update'):
-                    summary_text += f"**{table_name}** - Updating {len(operations['update'])} record(s)\n"
-                if operations.get('delete'):
-                    summary_text += f"**{table_name}** - Deleting {len(operations['delete'])} record(s)\n"
-            
-            summary_text += f"\n**Raw JSON Output:**\n```json\n{json.dumps(changes_dict, indent=2)}\n```"
-            
-            ai_message = AIMessage(content=summary_text)
-            
-        else:
-            # Fallback response
-            ai_message = AIMessage(content="I'm sorry, I couldn't process your request. Please try rephrasing your question.")
+        except Exception as validation_error:
+            self.logger.error(f"Error validating response format: {validation_error}")
+            # Fallback to unvalidated response
+            ai_message = AIMessage(content="I encountered an error while formatting the response. Please try again.")
         
         state["messages"] = state["messages"] + [ai_message]
         self.logger.info("Response formatted and added to messages")
@@ -436,7 +467,27 @@ Please analyze this current request in the context of the previous conversation.
         result = self.process_message(user_query, [])
         
         if result["success"]:
-            # Extract the AI response for CLI compatibility
+            # Try to get final_output from the current workflow state
+            try:
+                config = {"configurable": {"thread_id": "default"}}
+                current_state = self.workflow.get_state(config)
+                if current_state and current_state.values.get("final_output"):
+                    # Use the validated Pydantic output
+                    final_output = current_state.values["final_output"]
+                    
+                    if final_output.get("success") and final_output.get("changes"):
+                        # Return the clean JSON structure for successful operations
+                        return final_output["changes"]
+                    else:
+                        # Return error information
+                        return {
+                            "error": final_output.get("message", "Unknown error"),
+                            "success": False
+                        }
+            except Exception as e:
+                self.logger.debug(f"Could not retrieve final_output from state: {e}")
+            
+            # Fallback to existing logic if no validated output
             ai_messages = [msg for msg in result["messages"] if isinstance(msg, AIMessage)]
             if ai_messages:
                 latest_response = ai_messages[-1].content
