@@ -1,6 +1,9 @@
-from typing import Dict, List, Any, Optional
+from typing import Annotated, Dict, List, Any, Optional, Sequence
+from typing_extensions import TypedDict
 from pydantic import BaseModel, Field
 from enum import Enum
+from langgraph.graph.message import add_messages
+from langchain_core.messages import BaseMessage
 
 class QueryIntent(str, Enum):
     ADD_OPTIONS = "add_options"
@@ -76,3 +79,15 @@ class AgentState(BaseModel):
     next_action: str = "analyze_query"
     pending_clarification_questions: List[str] = Field(default_factory=list)
     needs_user_input: bool = False
+
+class ChatState(TypedDict):
+    """State for chatbot conversations with message history"""
+    messages: Annotated[Sequence[BaseMessage], add_messages]
+    user_query: str
+    parsed_query: Any
+    database_context: Dict[str, Any]
+    change_set: Any
+    validation_errors: List[str]
+    needs_clarification: bool
+    clarification_questions: List[str]
+    clarification_source: str

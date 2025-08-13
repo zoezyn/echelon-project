@@ -1,28 +1,16 @@
-from typing import Dict, Any, Literal, List, Sequence, Annotated
+from typing import Dict, Any, List
 from langgraph.graph import StateGraph, END
-from langgraph.graph.message import add_messages
+from langgraph.checkpoint.memory import MemorySaver
+from langgraph.types import interrupt, Command
 from langchain_core.messages import HumanMessage, AIMessage, BaseMessage
 from typing_extensions import TypedDict
 import json
-
-from ..utils.models import AgentState
 from ..utils.database import DatabaseManager
 from ..utils.logger import setup_logger
 from .query_parser import QueryParser
 from .change_generator import ChangeGenerator
 from .validator import ChangeValidator
-
-
-class ChatState(TypedDict):
-    """State for chatbot conversations with message history"""
-    messages: Annotated[Sequence[BaseMessage], add_messages]
-    user_query: str
-    parsed_query: Any
-    database_context: Dict[str, Any]
-    change_set: Any
-    validation_errors: List[str]
-    needs_clarification: bool
-    clarification_questions: List[str]
+from ..utils.models import ChatState
 
 class FormAgentWorkflow:
     def __init__(self, model_provider: str = "openai"):
@@ -42,6 +30,7 @@ class FormAgentWorkflow:
         
         # Add nodes
         workflow.add_node("analyze_query", self.analyze_query)
+        # workflow.add_node("validate_guardrails", self.validate_guardrails)
         workflow.add_node("ask_clarification", self.ask_clarification)
         workflow.add_node("get_database_context", self.get_database_context)
         workflow.add_node("generate_changes", self.generate_changes)
@@ -53,6 +42,15 @@ class FormAgentWorkflow:
         
         workflow.add_conditional_edges(
             "analyze_query",
+        #     self._should_clarify,
+        #     {
+        #         "clarify": "ask_clarification",
+        #         "continue": "validate_guardrails"
+        #     }
+        # )
+        
+        # workflow.add_conditional_edges(
+        #     "validate_guardrails",
             self._should_clarify,
             {
                 "clarify": "ask_clarification",
@@ -60,7 +58,16 @@ class FormAgentWorkflow:
             }
         )
         
-        workflow.add_edge("ask_clarification", END)
+        # After clarification, go back to where it came from
+        workflow.add_conditional_edges(
+            "ask_clarification",
+            self._clarification_router,
+            {
+                "analyze_query": "analyze_query",
+                "generate_changes": "generate_changes",
+                "default": "analyze_query"
+            }
+        )
         
         workflow.add_conditional_edges(
             "get_database_context",
@@ -71,11 +78,20 @@ class FormAgentWorkflow:
             }
         )
         
-        workflow.add_edge("generate_changes", "validate_changes")
+        workflow.add_conditional_edges(
+            "generate_changes",
+            self._should_clarify,
+            {
+                "clarify": "ask_clarification",
+                "continue": "validate_changes"
+            }
+        )
+        
         workflow.add_edge("validate_changes", "format_response")
         workflow.add_edge("format_response", END)
         
-        return workflow.compile()
+        memory = MemorySaver()
+        return workflow.compile(checkpointer=memory)
     
     def analyze_query(self, state: ChatState) -> ChatState:
         """Analyze the user's latest message with conversation context"""
@@ -95,8 +111,10 @@ class FormAgentWorkflow:
                         if isinstance(msg, HumanMessage):
                             conversation_context.append(f"User: {msg.content}")
                         elif isinstance(msg, AIMessage):
-                            # Check if this is a clarification request
-                            if "I need more information" in msg.content or "I couldn't find" in msg.content:
+                            # Check if this is a clarification request or error message
+                            if ("I need more information" in msg.content or 
+                                "I couldn't find" in msg.content or
+                                "Did you mean" in msg.content):
                                 conversation_context.append(f"Assistant: {msg.content}")
                     
                     # If we have meaningful conversation context, include it
@@ -134,6 +152,32 @@ Please analyze this current request in the context of the previous conversation.
         
         return state
     
+    # def validate_guardrails(self, state: ChatState) -> ChatState:
+    #     """Validate query against guardrails"""
+    #     self.logger.info("Validating query against guardrails")
+        
+    #     if state["parsed_query"]:
+    #         violations = self.guardrails.validate_query(
+    #             state["parsed_query"], 
+    #             state.get("database_context", {})
+    #         )
+            
+    #         if violations:
+    #             # Check for critical violations
+    #             if self.guardrails.has_critical_violations(violations):
+    #                 state["needs_clarification"] = True
+    #                 violation_message = self.guardrails.format_violations(violations)
+    #                 state["clarification_questions"] = [violation_message]
+    #                 self.logger.warning(f"Critical guardrail violations found: {len(violations)}")
+    #             else:
+    #                 # Just warnings - log them but continue
+    #                 violation_message = self.guardrails.format_violations(violations)
+    #                 self.logger.warning(f"Guardrail warnings: {violation_message}")
+    #         else:
+    #             self.logger.info("No guardrail violations found")
+        
+    #     return state
+    
     def get_database_context(self, state: ChatState) -> ChatState:
         """Get relevant database context"""
         self.logger.info("Getting database context")
@@ -164,6 +208,8 @@ Please analyze this current request in the context of the previous conversation.
     def ask_clarification(self, state: ChatState) -> ChatState:
         """Ask clarification questions"""
         self.logger.info("Asking for clarification")
+        self.logger.debug(f"Clarification questions: {state['clarification_questions']}")
+        self.logger.debug(f"Current messages count: {len(state['messages'])}")
         
         if state["clarification_questions"]:
             # Create clarification message
@@ -172,11 +218,33 @@ Please analyze this current request in the context of the previous conversation.
                 clarification_text += f"{i}. {question}\n"
             clarification_text += "\nPlease provide more details so I can assist you better."
             
-            ai_message = AIMessage(content=clarification_text)
-            state["messages"] = state["messages"] + [ai_message]
+            self.logger.debug(f"About to call interrupt with text: {clarification_text}")
             
-            self.logger.info(f"Added clarification message with {len(state['clarification_questions'])} questions")
+            # Use interrupt to wait for human input - this will raise GraphInterrupt
+            self.logger.info(f"Calling interrupt with clarification: {clarification_text}")
+            user_response = interrupt(clarification_text)
+            
+            # This code will only execute if the interrupt is resumed
+            self.logger.debug(f"interrupt() returned: {user_response}")
+            
+            # Add both the clarification and user response to messages
+            ai_message = AIMessage(content=clarification_text)
+            human_message = HumanMessage(content=user_response)
+            state["messages"] = state["messages"] + [ai_message, human_message]
+            
+            # Process the user response to update the parsed query
+            self.logger.info(f"Processing clarification response: {user_response}")
+            self._process_clarification_response(state, user_response)
+            
+            # Reset clarification flags since we got the input
+            state["needs_clarification"] = False
+            state["clarification_questions"] = []
+            
+            self.logger.info(f"Received user response: {user_response}")
+        else:
+            self.logger.warning("ask_clarification called but no clarification_questions found")
         
+        self.logger.debug(f"Returning state with {len(state['messages'])} messages")
         return state
     
     
@@ -200,7 +268,12 @@ Please analyze this current request in the context of the previous conversation.
                 self.logger.error(f"Error generating changes: {str(e)}")
                 import traceback
                 traceback.print_exc()
-                state["validation_errors"] = state["validation_errors"] + [f"Error generating changes: {str(e)}"]
+                
+                # Convert error to clarification request
+                error_message = str(e)
+                state["needs_clarification"] = True
+                state["clarification_questions"] = [error_message]
+                state["clarification_source"] = "generate_changes"
         else:
             self.logger.warning("Skipping change generation - either no parsed query or needs clarification")
         
@@ -209,19 +282,34 @@ Please analyze this current request in the context of the previous conversation.
     def validate_changes(self, state: ChatState) -> ChatState:
         """Validate the generated changes"""
         self.logger.info("Validating changes")
+        self.logger.debug(f"validate_changes - needs_clarification: {state.get('needs_clarification')}")
         
         if state["change_set"]:
+            self.logger.info("Validating changes2")
+            # Comprehensive guardrail validation (includes technical + policy validation)
             validation_errors = self.validator.validate_changes(
                 state["change_set"].to_dict(),
                 state["database_context"]
             )
+            self.logger.info("Validating changes3")
+            # Convert violations to error messages
+            # validation_errors = [violation.message for violation in guardrail_violations]
             state["validation_errors"] = validation_errors
-            
+            self.logger.info("Validating changes4")
             if validation_errors:
                 self.logger.warning(f"Found {len(validation_errors)} validation errors")
+                # # Check if there are critical guardrail violations
+                # critical_violations = [v for v in guardrail_violations if v.severity == 'critical']
+                # if critical_violations:
+                #     state["needs_clarification"] = True
+                #     violation_message = self.guardrails.format_violations(guardrail_violations)
+                #     state["clarification_questions"] = [violation_message]
             else:
                 self.logger.info("Changes validation passed")
+                # # Increment daily change counter on successful validation
+                # self.guardrails.increment_daily_changes()
         
+        # self.logger.debug(f"validate_changes completed - needs_clarification: {state.get('needs_clarification')}")
         return state
     
     def format_response(self, state: ChatState) -> ChatState:
@@ -271,14 +359,74 @@ Please analyze this current request in the context of the previous conversation.
         
         state["messages"] = state["messages"] + [ai_message]
         self.logger.info("Response formatted and added to messages")
+        self.logger.debug(f"format_response completed with {len(state['messages'])} total messages")
         
         return state
     
     def _should_clarify(self, state: ChatState) -> str:
         """Determine if clarification is needed"""
-        if state["needs_clarification"] and state["clarification_questions"]:
+        needs_clarification = state["needs_clarification"]
+        has_questions = bool(state["clarification_questions"])
+        
+        self.logger.debug(f"_should_clarify: needs_clarification={needs_clarification}, has_questions={has_questions}")
+        
+        if needs_clarification and has_questions:
+            self.logger.info("_should_clarify returning 'clarify'")
             return "clarify"
-        return "continue"
+        else:
+            self.logger.info("_should_clarify returning 'continue'")
+            return "continue"
+    
+    def _process_clarification_response(self, state: ChatState, user_response: str) -> None:
+        """Process user's clarification response and update the parsed query accordingly"""
+        clarification_source = state.get("clarification_source", "")
+        
+        self.logger.info(f"Processing clarification for source: {clarification_source}")
+        
+        if clarification_source == "generate_changes" and state.get("parsed_query"):
+            # For generate_changes errors, typically the user is providing the corrected value
+            parsed_query = state["parsed_query"]
+            
+            # If this is an update_options intent and the user provided a single response,
+            # assume they're correcting the "from" value
+            if (hasattr(parsed_query, 'intent') and 
+                parsed_query.intent.value == 'update_options' and 
+                hasattr(parsed_query, 'parameters') and 
+                parsed_query.parameters.get('operations')):
+                
+                operations = parsed_query.parameters['operations']
+                if operations and len(operations) > 0:
+                    # Update the "from" value with the user's clarification
+                    old_from = operations[0].get('from', '')
+                    operations[0]['from'] = user_response.strip()
+                    
+                    # Also update target_entities if they exist
+                    if hasattr(parsed_query, 'target_entities'):
+                        # Replace the old value with the new one
+                        target_entities = list(parsed_query.target_entities)
+                        if old_from in target_entities:
+                            idx = target_entities.index(old_from)
+                            target_entities[idx] = user_response.strip()
+                            parsed_query.target_entities = target_entities
+                    
+                    self.logger.info(f"Updated parsed_query: from '{old_from}' to '{user_response.strip()}'")
+                    self.logger.debug(f"Updated operations: {operations}")
+
+    def _clarification_router(self, state: ChatState) -> str:
+        """Route back to the appropriate node after clarification"""
+        source = state.get("clarification_source", "")
+        self.logger.info(f"Clarification router called with source: '{source}'")
+        self.logger.debug(f"Full state clarification_source: {state.get('clarification_source')}")
+        
+        if source == "generate_changes":
+            self.logger.info("Routing back to generate_changes")
+            return "generate_changes"
+        elif source == "validate_changes":
+            self.logger.info("Routing back to validate_changes")
+            return "validate_changes"
+        else:
+            self.logger.info(f"Unknown clarification source '{source}', routing to default (analyze_query)")
+            return "default"
     
     
     def process_query(self, user_query: str) -> Dict[str, Any]:
@@ -318,36 +466,147 @@ Please analyze this current request in the context of the previous conversation.
             return {"error": "No response generated"}
         else:
             return {"error": result.get("error", "Unknown error")}
-    
-    
+
+
     def process_message(self, user_message: str, conversation_history: List[BaseMessage] = None) -> Dict[str, Any]:
-        """Process a user message and return the response"""
+        """Process a user message and return the response - handles both new conversations and resume from interrupts"""
+        
+        import threading
+        thread_id = threading.current_thread().ident
+        self.logger.info(f"process_message called with message: {user_message} (thread: {thread_id})")
+        self.logger.debug(f"Conversation history length: {len(conversation_history) if conversation_history else 0}")
         
         try:
-            # Initialize state with conversation history
-            initial_state = ChatState(
-                messages=conversation_history or [],
-                user_query="",
-                parsed_query=None,
-                database_context={},
-                change_set=None,
-                validation_errors=[],
-                needs_clarification=False,
-                clarification_questions=[]
-            )
+            config = {"configurable": {"thread_id": "default"}}
             
-            # Add the new user message
-            human_message = HumanMessage(content=user_message)
-            initial_state["messages"] = initial_state["messages"] + [human_message]
+            # Check if there's an existing interrupted workflow state
+            try:
+                current_state = self.workflow.get_state(config)
+                is_interrupted = current_state and hasattr(current_state, 'next') and current_state.next
+                self.logger.info(f"Existing workflow state found. Is interrupted: {is_interrupted}")
+                
+                if is_interrupted:
+                    self.logger.info("Resuming from interrupted workflow")
+                    # This is a resume scenario - use Command(resume=...)
+                    result_state = None
+                    
+                    event_count = 0
+                    for event in self.workflow.stream(Command(resume=user_message), config, stream_mode="updates"):
+                        event_count += 1
+                        self.logger.info(f"Resume event #{event_count}: {list(event.keys()) if isinstance(event, dict) else event}")
+                        self.logger.debug(f"Resume event #{event_count} full: {event}")
+                        
+                        if "__interrupt__" in event:
+                            # Another interrupt occurred
+                            interrupt_info = event["__interrupt__"][0]
+                            interrupt_value = interrupt_info.value
+                            
+                            self.logger.info(f"Another interrupt occurred during resume: {interrupt_value}")
+                            
+                            # Get current state to build proper response
+                            current_state = self.workflow.get_state(config)
+                            ai_message = AIMessage(content=interrupt_value)
+                            return {
+                                "messages": current_state.values["messages"] + [ai_message],
+                                "success": True,
+                                "interrupted": True,
+                                "thread_id": config["configurable"]["thread_id"]
+                            }
+                        else:
+                            # Update with the latest state
+                            for node_name, node_state in event.items():
+                                self.logger.info(f"Resume processing node {node_name} (event #{event_count})")
+                                if node_state is not None:
+                                    result_state = node_state
+                    
+                    self.logger.info(f"Resume stream completed after {event_count} events")
+                    self.logger.debug(f"Final result_state: {result_state}")
+                    self.logger.debug(f"Result_state type: {type(result_state)}")
+                    if result_state:
+                        self.logger.debug(f"Result_state has messages: {'messages' in result_state if hasattr(result_state, '__contains__') else 'not dict-like'}")
+                    
+                    # Return the final result from resume
+                    if result_state and "messages" in result_state:
+                        self.logger.info("Resume completed successfully with result_state")
+                        self.logger.debug(f"Final result_state keys: {result_state.keys() if hasattr(result_state, 'keys') else 'not dict'}")
+                        return {
+                            "messages": result_state["messages"],
+                            "success": True
+                        }
+                    else:
+                        # Get current state if no result_state
+                        current_state = self.workflow.get_state(config)
+                        self.logger.info("Resume completed, using current workflow state")
+                        self.logger.debug(f"Current state: {current_state}")
+                        return {
+                            "messages": current_state.values.get("messages", []),
+                            "success": True
+                        }
+                        
+            except Exception as state_check_error:
+                self.logger.debug(f"No existing state or error checking state: {state_check_error}")
+                is_interrupted = False
             
-            # Run the unified workflow
-            result = self.workflow.invoke(initial_state)
-            
-            # Return the updated conversation state
-            return {
-                "messages": result["messages"],
-                "success": True
-            }
+            if not is_interrupted:
+                self.logger.info("Starting new workflow - no interrupted state detected")
+                # This is a new conversation - initialize fresh state
+                initial_state = ChatState(
+                    messages=conversation_history or [],
+                    user_query="",
+                    parsed_query=None,
+                    database_context={},
+                    change_set=None,
+                    validation_errors=[],
+                    needs_clarification=False,
+                    clarification_questions=[],
+                    clarification_source=""
+                )
+                
+                # Add the new user message
+                human_message = HumanMessage(content=user_message)
+                initial_state["messages"] = initial_state["messages"] + [human_message]
+                
+                # Use stream to handle interrupts properly
+                result_state = None
+                
+                self.logger.debug(f"Starting new workflow stream with config: {config}")
+                
+                for event in self.workflow.stream(initial_state, config, stream_mode="updates"):
+                    self.logger.debug(f"New workflow event: {event}")
+                    
+                    if "__interrupt__" in event:
+                        # Extract the interrupt value (clarification question)
+                        interrupt_info = event["__interrupt__"][0]
+                        interrupt_value = interrupt_info.value
+                        
+                        self.logger.info(f"New workflow interrupted with value: {interrupt_value}")
+                        
+                        # Return the interrupt as a clarification request
+                        ai_message = AIMessage(content=interrupt_value)
+                        return {
+                            "messages": initial_state["messages"] + [ai_message],
+                            "success": True,
+                            "interrupted": True,
+                            "thread_id": config["configurable"]["thread_id"]
+                        }
+                    else:
+                        # Update with the latest state
+                        for node_name, node_state in event.items():
+                            self.logger.debug(f"New workflow processing node {node_name}")
+                            if node_state is not None:
+                                result_state = node_state
+                
+                # If no interrupt occurred, return the final result
+                if result_state and "messages" in result_state:
+                    return {
+                        "messages": result_state["messages"],
+                        "success": True
+                    }
+                else:
+                    return {
+                        "messages": initial_state["messages"],
+                        "success": True
+                    }
             
         except Exception as e:
             self.logger.error(f"Error processing message: {e}")
