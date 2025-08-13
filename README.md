@@ -4,11 +4,11 @@ An intelligent agent that processes natural language queries to generate structu
 
 ## Features
 
-- <**Natural Language Processing**: Convert plain English requests into structured database operations
-- ='**Multi-Intent Support**: Handle form field creation, option management, conditional logic, and form creation
-- =**Database Safety**: Comprehensive validation and constraint checking
-- =**Performance Testing**: Sandbox testing framework for validation and quality assurance
-- <**Multiple Interfaces**: CLI, Streamlit web app, and programmatic API
+- **Natural Language Processing**: Convert plain English requests into structured database operations
+- **Multi-Intent Support**: Handle form field creation, option management, conditional logic, and form creation
+- **Database Safety**: Comprehensive validation and constraint checking
+- **Performance Testing**: Sandbox testing framework for validation and quality assurance
+- **Multiple Interfaces**: CLI, Streamlit web app with UI
 
 ## How to Run Locally
 
@@ -16,7 +16,7 @@ An intelligent agent that processes natural language queries to generate structu
 
 - Python 3.11+
 - OpenAI API key or Anthropic API key
-- SQLite database with form schema
+
 
 ### Installation
 
