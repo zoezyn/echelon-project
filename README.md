@@ -102,25 +102,25 @@ python -m src.evaluation.test_runner --interactive
 
 4. **Multi-Agent Workflow**: The system uses a coordinated multi-agent approach with specialized roles:
 
-   **🔍 Query Analyzer Agent**: 
-   Initial query understanding: Analyze user input, determine user intent, extract useful entities and information as structured JSON and detect if there is any clarification needed
+   - **Query Analyzer Agent**: 
+   Initial query understanding. This agent analyzes user input, determines user intent, extracts useful entities and information as structured JSON and detects if there is any clarification needed
 
-   **🗂️ Context Gatherer Agent**: 
-   Database schema understanding: This agent retrieves relevant database context including forms, fields, option sets, and relationships. It performs fuzzy matching for field names and form identification to match information provided by user with database rows. This also validates if the user provided information is correct and matches the database schema.
+   - **Context Gatherer Agent**: 
+   Database schema understanding. This agent retrieves relevant database context including forms, fields, option sets, and relationships. It performs fuzzy matching for field names and form identification to match information provided by user with database rows. This also validates if the user provided information is correct and matches the database schema.
 
-   **💬 Clarification Agent**: 
+   - **Clarification Agent**: 
    For any ambigurity arises in the workflow, the process is redirected to the clarification agent to ask user for more information.
 
-   **🔄 Replan Agent**: 
+   - **Replan Agent**: 
    It re-analyzes queries when user provides clarifications or additional information and updates the state based on new information.
 
-   **⚙️ Change Generator Agent**: 
+   - **Change Generator Agent**: 
    It converts parsed queries and context into specific database operations (INSERT/UPDATE/DELETE). The output is a ChangeSet with detailed operations for each affected table.
 
-   **✅ Change Validator Agent**: 
-   Safety and correctness verification: Validates generated changes for constraint compliance, required fields, and referential integrity
+   - **Change Validator Agent**: 
+   Safety and correctness verification. It validates generated changes for constraint compliance, required fields, and referential integrity
 
-   **📄 Response Formatter Agent**: 
+   - **Response Formatter Agent**: 
    It formats final change sets into consistent JSON structure for API consumption
 
 
