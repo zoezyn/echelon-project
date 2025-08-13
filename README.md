@@ -72,10 +72,12 @@ python -m src.evaluation.test_runner --query "Add option 'PhD' to education fiel
 python -m src.evaluation.test_runner --interactive
 
 ```
-![Workflow Architecture](data/workflow.jpeg)
-
 
 ### Key Design Decisions
+
+<div align="center">
+  <img src="data/workflow.jpeg" alt="Workflow Architecture" width="500"/>
+</div>
 
 1. **Framework**: I chose LangGraph to manage the agent workflow and enabled stateful conversations.
 
