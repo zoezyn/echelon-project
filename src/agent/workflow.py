@@ -43,15 +43,6 @@ class FormAgentWorkflow:
         
         workflow.add_conditional_edges(
             "analyze_query",
-        #     self._should_clarify,
-        #     {
-        #         "clarify": "ask_clarification",
-        #         "continue": "validate_guardrails"
-        #     }
-        # )
-        
-        # workflow.add_conditional_edges(
-        #     "validate_guardrails",
             self._should_clarify,
             {
                 "clarify": "ask_clarification",
@@ -301,31 +292,6 @@ Please update the ParsedQuery to incorporate the user's clarification:""")
             state["clarification_questions"] = []
             self.logger.warning("Fallback: cleared clarification flags to continue workflow")
     
-    # def validate_guardrails(self, state: ChatState) -> ChatState:
-    #     """Validate query against guardrails"""
-    #     self.logger.info("Validating query against guardrails")
-        
-    #     if state["parsed_query"]:
-    #         violations = self.guardrails.validate_query(
-    #             state["parsed_query"], 
-    #             state.get("database_context", {})
-    #         )
-            
-    #         if violations:
-    #             # Check for critical violations
-    #             if self.guardrails.has_critical_violations(violations):
-    #                 state["needs_clarification"] = True
-    #                 violation_message = self.guardrails.format_violations(violations)
-    #                 state["clarification_questions"] = [violation_message]
-    #                 self.logger.warning(f"Critical guardrail violations found: {len(violations)}")
-    #             else:
-    #                 # Just warnings - log them but continue
-    #                 violation_message = self.guardrails.format_violations(violations)
-    #                 self.logger.warning(f"Guardrail warnings: {violation_message}")
-    #         else:
-    #             self.logger.info("No guardrail violations found")
-        
-    #     return state
     
     def get_database_context(self, state: ChatState) -> ChatState:
         """Get relevant database context"""
@@ -443,23 +409,13 @@ Please update the ParsedQuery to incorporate the user's clarification:""")
             )
             self.logger.info("Validating changes3")
             # Convert violations to error messages
-            # validation_errors = [violation.message for violation in guardrail_violations]
             state["validation_errors"] = validation_errors
             self.logger.info("Validating changes4")
             if validation_errors:
                 self.logger.warning(f"Found {len(validation_errors)} validation errors")
-                # # Check if there are critical guardrail violations
-                # critical_violations = [v for v in guardrail_violations if v.severity == 'critical']
-                # if critical_violations:
-                #     state["needs_clarification"] = True
-                #     violation_message = self.guardrails.format_violations(guardrail_violations)
-                #     state["clarification_questions"] = [violation_message]
             else:
                 self.logger.info("Changes validation passed")
-                # # Increment daily change counter on successful validation
-                # self.guardrails.increment_daily_changes()
-        
-        # self.logger.debug(f"validate_changes completed - needs_clarification: {state.get('needs_clarification')}")
+
         return state
     
     def format_response(self, state: ChatState) -> ChatState:

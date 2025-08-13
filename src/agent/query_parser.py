@@ -28,6 +28,8 @@ class QueryParser:
             )
         
         self.parser = JsonOutputParser(pydantic_object=ParsedQuery)
+
+        self.database_schema = self.db.get_schema()
         
         self.system_prompt = ChatPromptTemplate.from_messages([
             ("system", """You are an expert at parsing natural language queries about form management operations.
@@ -50,18 +52,9 @@ Available query intents:
 
 - UNKNOWN: Query intent unclear - ask for clarification
 
-Form context database tables:
-- forms: id, slug, title, description, status, category_id
-- form_fields: id, form_id, page_id, type_id, code, label, position, required, visible_by_default
-- option_sets: id, form_id, name
-- option_items: id, option_set_id, value, label, position, is_active
-- logic_rules: id, form_id, name, trigger, scope, priority, enabled
-- logic_conditions: id, rule_id, lhs_ref, operator, rhs, bool_join, position
-- logic_actions: id, rule_id, action, target_ref, params, position
+Here is the database schema: {database_schema} which you can use to understand the table structure and relationships. 
 
-Field types available:
-1=short_text, 2=long_text, 3=dropdown, 4=radio, 5=checkbox, 6=tags, 7=date, 8=number, 9=file_upload, 10=email
-
+             
 Analyze the query and return JSON with:
 - intent: The primary intent (enum value)
 - form_identifier: Form name, slug, or ID mentioned
@@ -146,6 +139,7 @@ Query: "How is the weather?"
         self.logger.info(f"Full query sent to LLM: {full_query}")
         
         prompt = self.system_prompt.partial(
+            database_schema = self.database_schema,
             format_instructions=self.parser.get_format_instructions()
         )
         

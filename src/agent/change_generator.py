@@ -225,6 +225,45 @@ class ChangeGenerator:
         }
         
         change_set.add_insert('form_fields', new_field)
+
+        # Create option set + option items for selectable fields
+        selectable_type_ids = {3, 4, 5, 6}  # dropdown, radio, checkbox
+        options = parsed_query.parameters.get('options') or []
+        if type_id in selectable_type_ids and options:
+            option_set_id = f"$opts_{parsed_query.field_code}"
+            option_set = {
+                "id": option_set_id,
+                "form_id": form['id'],
+                "name": f"{parsed_query.field_code}_options"
+            }
+            change_set.add_insert('option_sets', option_set)
+
+            # Bind option set to field
+            change_set.add_insert('field_option_binding', {
+                "field_id": new_field["id"],
+                "option_set_id": option_set_id
+            })
+
+            # Normalize options to strings; support dicts with value/label
+            def to_value_label(opt: Any) -> Dict[str, str]:
+                if isinstance(opt, dict):
+                    v = opt.get("value") or opt.get("label") or ""
+                    l = opt.get("label") or opt.get("value") or ""
+                    return {"value": str(v).title(), "label": str(l).title()}
+                return {"value": str(opt).title(), "label": str(opt).title()}
+
+            for idx, raw in enumerate(options, start=1):
+                vl = to_value_label(raw)
+                opt_id_suffix = vl["value"].lower().replace(' ', '_')
+                change_set.add_insert('option_items', {
+                    "id": f"$opt_{parsed_query.field_code}_{opt_id_suffix}",
+                    "option_set_id": option_set_id,
+                    "value": vl["value"],
+                    "label": vl["label"],
+                    "position": idx,
+                    "is_active": 1
+                })
+
         return change_set
     
     def _handle_add_logic(self, parsed_query: ParsedQuery, context: Dict[str, Any], change_set: ChangeSet) -> ChangeSet:
