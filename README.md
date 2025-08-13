@@ -73,10 +73,10 @@ python -m src.evaluation.test_runner --interactive
 
 ```
 
-### Key Design Decisions
+## Key Design Decisions
 
 <div align="center">
-  <img src="data/workflow.jpeg" alt="Workflow Architecture" width="200"/>
+  <img src="data/workflow.jpeg" alt="Workflow Architecture" width="250"/>
 </div>
 
 1. **Framework**: I chose LangGraph to manage the agent workflow and enabled stateful conversations.
