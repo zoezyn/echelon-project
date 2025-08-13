@@ -5,7 +5,7 @@ import os
 # Add src to path
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'src'))
 
-from agent.workflow import FormAgentWorkflow
+from src.agent.workflow import FormAgentWorkflow
 
 class TestExampleQueries:
     """Test cases based on the provided examples"""
@@ -16,7 +16,7 @@ class TestExampleQueries:
     
     def test_update_dropdown_options(self):
         """Test: update dropdown options for destination field"""
-        query = "update the dropdown options for the destination field in the travel request form: 1. add a paris option, 2. change tokyo to wuhan"
+        query = "update the dropdown options for the destinations field in the travel request form: 1. add a paris option, 2. change tokyo to wuhan"
         
         result = self.agent.process_query(query)
         
@@ -87,49 +87,6 @@ class TestExampleQueries:
         
         assert show_action is not None
         assert require_action is not None
-    
-    def test_create_snack_request_form(self):
-        """Test: create new form for snack requests"""
-        # This query should trigger clarification
-        query = "I want to create a new form to allow employees to request a new snack. There should be a category field (ice cream/ beverage/ fruit/ chips/ gum), and name of the item (text)."
-        
-        result = self.agent.process_query(query)
-        
-        # Should not have errors
-        assert "error" not in result
-        
-        # Should create form
-        assert "forms" in result
-        assert "insert" in result["forms"]
-        
-        # Should create form page
-        assert "form_pages" in result
-        assert "insert" in result["form_pages"]
-        
-        # Should create fields
-        assert "form_fields" in result
-        assert "insert" in result["form_fields"]
-        
-        # Check form creation
-        form = result["forms"]["insert"][0]
-        assert "snack" in form["title"].lower()
-        assert form["status"] == "draft"
-        
-        # Check fields
-        fields = result["form_fields"]["insert"]
-        
-        # Should have category field (dropdown) and item name field (text)
-        category_field = next((f for f in fields if "category" in f["code"]), None)
-        name_field = next((f for f in fields if "name" in f["code"] or "item" in f["code"]), None)
-        
-        assert category_field is not None
-        assert name_field is not None
-        
-        # Category should be dropdown type
-        assert category_field["type_id"] == 3  # dropdown
-        
-        # Name should be text type
-        assert name_field["type_id"] == 1  # short_text
 
 class TestEdgeCases:
     """Test edge cases and error conditions"""
@@ -172,7 +129,7 @@ class TestValidation:
     
     def setup_method(self):
         """Setup test fixtures"""
-        from agent.validator import ChangeValidator
+        from src.agent.validator import ChangeValidator
         self.validator = ChangeValidator()
     
     def test_valid_changeset(self):

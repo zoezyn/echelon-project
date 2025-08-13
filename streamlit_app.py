@@ -62,9 +62,7 @@ st.sidebar.markdown("""
 
 st.sidebar.markdown("### 💡 Example queries:")
 st.sidebar.markdown("""
-- "Add a Paris option to destination field"
-- "Create a new phone number field" 
-- "Make email required when status is Active"
+- "Add a Paris option to destinations field in travel request form"
 - "Create a new procurement form"
 """)
 

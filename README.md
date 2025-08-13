@@ -95,30 +95,30 @@ python -m src.evaluation.test_runner --interactive
    - DELETE_LOGIC: Removing logic rules
 
 
-3. Used **Plan-execute-replan** structure: The agent takes the initial input from user, extract information and plan the inital steps. If anything is unclear, either it's because user's query has ambiguity or the agent doesn't find corresponding information in the database (incl. typo etc.), the agent will ask user for clarification and then replan the steps, until it generates the final output.
+3. Used **plan-execute-replan** structure: The agent takes the initial input from user, extract information and plan the inital steps. If anything is unclear, either it's because user's query has ambiguity or the agent doesn't find corresponding information in the database (incl. typo etc.), the agent will ask user for clarification and then replan the steps, until it generates the final output.
 
 
 4. **Multi-Agent Workflow**: The system uses a coordinated multi-agent approach with specialized roles:
 
-   **🔍 Query Analyzer Agent**
+   **🔍 Query Analyzer Agent**: 
    Initial query understanding: Analyze user input, determine user intent, extract useful entities and information as structured JSON and detect if there is any clarification needed
 
-   **🗂️ Context Gatherer Agent**
+   **🗂️ Context Gatherer Agent**: 
    Database schema understanding: This agent retrieves relevant database context including forms, fields, option sets, and relationships. It performs fuzzy matching for field names and form identification to match information provided by user with database rows. This also validates if the user provided information is correct and matches the database schema.
 
-   **💬 Clarification Agent**
+   **💬 Clarification Agent**: 
    For any ambigurity arises in the workflow, the process is redirected to the clarification agent to ask user for more information.
 
-   **🔄 Replan Agent**
+   **🔄 Replan Agent**: 
    It re-analyzes queries when user provides clarifications or additional information and updates the state based on new information.
 
-   **⚙️ Change Generator Agent**
+   **⚙️ Change Generator Agent**: 
    It converts parsed queries and context into specific database operations (INSERT/UPDATE/DELETE). The output is a ChangeSet with detailed operations for each affected table.
 
-   **✅ Change Validator Agent**
+   **✅ Change Validator Agent**: 
    Safety and correctness verification: Validates generated changes for constraint compliance, required fields, and referential integrity
 
-   **📄 Response Formatter Agent**
+   **📄 Response Formatter Agent**: 
    It formats final change sets into consistent JSON structure for API consumption
 
 
@@ -138,13 +138,13 @@ python -m src.evaluation.test_runner --interactive
 3. Edge cases handling: The replan agent is designed to only update the state based on the new information. It does not do the full query understanding (by design). This works well when user inputs a normal query and then add some clarification information. However, if user inputs irrelevant question first, and then start to ask the relevant question, it will only loop inside the replan agent which is not as powerful as the analyzer agent to extract all the entities. We will need to add another condition when it will redirect back to the analyzer agent.
 
 4. User experience: right now the app will ask user to always provide text input when asking for clarification. It would be convenient to also provide clickable box for the available options. For example:
-```
-I couldn't find an option called 'san franciscco' in the destinations field.
+   ```
+   I couldn't find an option called 'san franciscco' in the destinations field.
 
-Did you mean one of these similar options?
-• San Francisco
-```
-Where San Francisco can be a clickable item.
+   Did you mean one of these similar options?
+   • San Francisco
+   ```
+   Where San Francisco can be a clickable item.
 
 5. It is not fully tested yet for complex queries (e.g. with multi-condition logic rules).
 
