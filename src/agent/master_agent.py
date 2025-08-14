@@ -10,6 +10,7 @@ database operations.
 import json
 import uuid
 import logging
+import os
 from typing import Dict, List, Any
 from agents import Agent, function_tool, Runner, enable_verbose_stdout_logging
 from .ask_clarification_agent import AskClarificationAgent
@@ -28,22 +29,26 @@ class MasterAgent:
     subagents to achieve the desired database modifications.
     """
     
-    def __init__(self, model="gpt-4", db_path="data/forms.sqlite", verbose_logging=True):
+    def __init__(self, model="gpt-5", db_path="data/forms.sqlite", verbose_logging=True):
         self.db_path = db_path
         self.model = model
         
-        # Initialize logging
+        # Initialize logging first
         self.logger = get_agent_logger("MasterAgent", "DEBUG")
+        
+        # Load database schema
+        schema_path = os.path.join(os.path.dirname(db_path), "database_schema.json")
+        self.db_schema = self._load_database_schema(schema_path)
         self.logger.log_step("Initializing MasterAgent", {
             "model": model,
             "db_path": db_path,
+            "schema_loaded": bool(self.db_schema),
             "verbose_logging": verbose_logging
         })
         
         # Enable OpenAI Agents SDK verbose logging
         if verbose_logging:
             enable_verbose_stdout_logging()
-            self.logger.log_step("Enabled OpenAI Agents SDK verbose logging")
             
             # Configure SDK loggers
             openai_agents_logger = logging.getLogger("openai.agents")
@@ -52,7 +57,6 @@ class MasterAgent:
             openai_agents_logger.setLevel(logging.DEBUG)
             openai_tracing_logger.setLevel(logging.DEBUG)
             
-            self.logger.log_step("Configured SDK loggers for debug level")
         
         # Initialize subagents
         self.clarification_agent = AskClarificationAgent(model=model)
@@ -79,9 +83,67 @@ class MasterAgent:
             "function_tools": len(function_tools),
             "agent_tools": len(agent_tools)
         })
+    
+    def _load_database_schema(self, schema_path: str) -> Dict:
+        """Load database schema from JSON file"""
+        try:
+            if os.path.exists(schema_path):
+                with open(schema_path, 'r') as f:
+                    schema = json.load(f)
+                self.logger.log_step("Database schema loaded successfully", {
+                    "schema_path": schema_path,
+                    "table_count": len(schema.get("tables", {}))
+                })
+                return schema
+            else:
+                self.logger.log_step("Database schema file not found", {
+                    "schema_path": schema_path
+                })
+                return {}
+        except Exception as e:
+            self.logger.log_error(e, "Failed to load database schema")
+            return {}
         
     def _get_instructions(self):
-        return """# Enterprise Form Management Master Agent
+        # Include database schema in instructions if available
+        schema_context = ""
+        if self.db_schema and "tables" in self.db_schema:
+            schema_context = f"""
+
+## Database Schema Context
+
+You have access to the complete database schema with exact table names and column structures:
+
+**Available Tables:**
+{', '.join(self.db_schema["tables"].keys())}
+
+**Key Tables for Common Operations:**
+- **option_items**: For modifying dropdown/radio button choices (not "options")
+- **form_fields**: For modifying form field properties (not "fields") 
+- **logic_rules**: For form logic rules
+- **logic_conditions**: For rule conditions
+- **logic_actions**: For rule actions
+- **forms**: For form metadata
+- **form_pages**: For form page structure
+- **option_sets**: For grouping options
+- **field_option_binding**: For linking fields to option sets
+
+**COMPLETE FORM CREATION REQUIRES ALL OF:**
+1. **forms** - form metadata
+2. **form_pages** - page structure (fields belong to pages)
+3. **form_fields** - field definitions
+4. **field_types** - field type references
+5. **option_sets** - dropdown option groups
+6. **option_items** - individual dropdown choices
+7. **field_option_binding** - connects dropdown fields to option sets
+
+**Table Relationships:**
+{json.dumps(self.db_schema.get("relationships", []), indent=2)}
+
+CRITICAL: Always use these EXACT table names in your changesets. Never assume or guess table names.
+"""
+        
+        return f"""# Enterprise Form Management Master Agent
 
 You are an expert AI agent for managing an enterprise form system. Your job is to understand natural language requests and orchestrate specialized subagents to convert them into precise database operations.
 
@@ -105,7 +167,7 @@ Key relationships:
 - Forms contain Pages contain Fields
 - Fields reference Option Sets for choices
 - Logic Rules contain Conditions and Actions
-- All operations must respect foreign key constraints
+- All operations must respect foreign key constraints{schema_context}
 
 ## Available Tools
 
@@ -119,12 +181,8 @@ Use when you need to explore and understand the current database state.
 - Has tools to explore schema, relationships, sample data
 - Can discover existing forms, fields, options, and logic rules
 - Provides context needed for intelligent decision making
-
-### validate_changeset
-Use when you have generated a changeset and need validation.
-- Applies changes to in-memory database copy
-- Returns structured validation results with error details
-- Provides suggestions for fixing validation failures
+- ALWAYS returns complete table row data with all columns and values
+- Provides exact table names for changeset generation
 
 ### store_context
 Store information in context memory for later use.
@@ -140,16 +198,16 @@ Notice: when calling tools, provide a concrete description of what you need, for
 3. **ALWAYS EXPLORE FIRST**: Use get_database_context tool to gather current schema, data, and context - this is MANDATORY before generating any changeset
 4. **Clarify**: Use ask_clarification tool if requirements are unclear after exploration
 5. **Generate**: Create the database changeset using your expertise and the explored context
-6. **Validate**: Use validate_changeset tool to ensure changeset is correct
 7. **Output**: Return clean JSON with proper structure
 
 ## CRITICAL RULE: ALWAYS EXPLORE DATABASE FIRST
 
 Before generating any changeset, you MUST use the get_database_context tool to:
 - Understand the current database schema
-- See existing data structures
+- See existing data structures  
 - Identify correct table names and column names
-- Find existing records that need to be modified
+- FOR UPDATES: Find existing records that need to be modified
+- FOR CREATION: Explore table structure, required fields, field types, and creation patterns
 - Understand relationships between tables
 
 ## CRITICAL RULE: ALWAYS IDENTIFY THE CORRECT TARGET TABLE
@@ -168,13 +226,13 @@ Failure to explore first will result in incorrect column names, table structures
 
 Always output valid JSON in this exact structure:
 ```json
-{
-  "table_name": {
+{{
+  "table_name": {{
     "insert": [objects with all required fields],
     "update": [objects with id and changed fields], 
     "delete": [objects with id field]
-  }
-}
+  }}
+}}
 ```
 
 ## Guidelines
@@ -185,16 +243,21 @@ Always output valid JSON in this exact structure:
 - Use placeholder IDs (starting with $) for new records
 - Build understanding incrementally rather than trying to solve everything at once
 - Apply advanced reasoning to handle complex multi-step requirements
-- Always validate your changesets before returning them to the user
 - Always decompose user queries into subtasks and describes them to those subagents when needed. Each subagent needs an objective, an output format, guidance on the tools and sources to use, and clear task boundaries.
 
 ## Examples
+
+### UPDATE Example
 - **User Query**: "update the dropdown options for the destination field in the travel request form: 1. add a paris option, 2. change tokyo to wuhan"
-  **Your internal reasoning**: - User wants to modify dropdown options for a specific field. -Need to: 1) Add new option "Paris", 2) Update existing "Tokyo" → "Wuhan". -Must find: travel request form → destination field → option_set → specific options. -This is a straightforward CRUD operation, no dynamic logic involved
-  **Call get_database_context tool with the following input**: "Objective: Find the destination field in travel request form and its option set. Identify the correct table name for option modifications and find any existing Paris or Tokyo options. Return me: Form ID, field ID, option_set_id, the EXACT table name where options are stored, and the row details of any existing Tokyo option. Organize the information in a JSON object."
-  **Generate changeset**: Generate changeset using the EXACT table name found during exploration (e.g., "option_items") and the discovered data structure.
-  **Call validate_changeset tool**: Use the generated changeset as input to the validate_changeset agent to ensure it can be applied without errors.
-  **Output**: If the validation is passed. Return the validated changeset in the required JSON format with the correct table name. Otherwise, check the validation errors and think for the steps to fix them.
+  **Your internal reasoning**: User wants to MODIFY existing dropdown options. Need to find existing records to update.
+  **Call get_database_context tool**: "Find the destination field in travel request form and its option set. Return COMPLETE row data for the form, field, option_set, and all existing option_items including the Tokyo option if it exists."
+  **Generate changeset**: Use found records to update existing option and insert new option.
+
+### CREATE Example  
+- **User Query**: "I want to create a new form for snack requests. There should be a category field (ice cream/beverage/fruit/chips/gum) and name field (text)."
+  **Your internal reasoning**: User wants to CREATE new form with dropdown and text fields. Need complete workflow including pages and field-option bindings.
+  **Call get_database_context tool**: "Explore the complete structure for creating new forms with fields and dropdowns. Return schemas and sample data for ALL required tables: forms, form_pages, form_fields, field_types, option_sets, option_items, and field_option_binding. Show how dropdown fields connect to option sets via field_option_binding."
+  **Generate changeset**: Create records in correct dependency order with all required intermediate tables. 
 
 """
 
@@ -291,36 +354,45 @@ Always output valid JSON in this exact structure:
         return [store_context, retrieve_context]
     
     def _create_agent_tools(self) -> List:
-        """Create agent tools using the agents-as-tools pattern"""
+        """Create agent tools using custom Runner.run implementation"""
         
-        self.logger.log_step("Creating agent tools using agents-as-tools pattern")
+        self.logger.log_step("Creating agent tools using custom Runner.run pattern")
         
-        # Use clarification agent as a tool
-        self.logger.log_step("Creating clarification agent tool")
-        clarification_tool = self.clarification_agent.agent.as_tool(
-            tool_name="ask_clarification",
-            tool_description="Generate clarification questions when the user query is ambiguous or missing critical details"
-        )
+        @function_tool
+        async def ask_clarification(user_query: str) -> str:
+            """Generate clarification questions when the user query is ambiguous or missing critical details
+            
+            Args:
+                user_query: The user query that needs clarification
+            """
+            try:
+                result = await Runner.run(
+                    self.clarification_agent.agent,
+                    input=user_query,
+                    max_turns=3
+                )
+                return str(result.final_output) if result.final_output else "No clarification response received"
+            except Exception as e:
+                return f"Error running clarification agent: {str(e)}"
         
-        # Use database context agent as a tool  
-        self.logger.log_step("Creating database exploration agent tool")
-        db_exploration_tool = self.db_context_agent.agent.as_tool(
-            tool_name="get_database_context",
-            tool_description="Explore the database to gather context about forms, fields, options, and logic rules"
-        )
+        @function_tool
+        async def get_database_context(exploration_request: str) -> str:
+            """Explore the database to gather context about forms, fields, options, and logic rules
+            
+            Args:
+                exploration_request: Detailed description of what database information is needed
+            """
+            try:
+                result = await Runner.run(
+                    self.db_context_agent.agent,
+                    input=exploration_request,
+                    max_turns=5
+                )
+                return str(result.final_output) if result.final_output else "No database context response received"
+            except Exception as e:
+                return f"Error running database context agent: {str(e)}"
         
-        # Use validator agent as a tool
-        self.logger.log_step("Creating validation agent tool")
-        validation_tool = self.validator_agent.agent.as_tool(
-            tool_name="validate_changeset", 
-            tool_description="Validate a generated changeset by applying it to an in-memory database copy"
-        )
-        
-        tools = [clarification_tool, db_exploration_tool, validation_tool]
-        self.logger.log_step("Agent tools created successfully", {
-            "tool_count": len(tools),
-            "tool_names": ["ask_clarification", "get_database_context", "validate_changeset"]
-        })
+        tools = [ask_clarification, get_database_context]
         
         return tools
 

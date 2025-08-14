@@ -1,275 +1,297 @@
 #!/usr/bin/env python3
 """
-Form Management AI Agent
+Interactive Terminal Chat Interface for Enterprise Form Management Agent
 
-An interactive CLI tool that processes natural language queries about 
-form management operations and outputs structured JSON changesets.
+This provides a terminal-based chat interface to interact with the master agent
+and test the complete agent orchestration system.
 """
 
 import os
 import sys
 import json
-from typing import Dict, Any, Optional
+from typing import Dict, Any
 
-# Add src to path
-sys.path.append(os.path.join(os.path.dirname(__file__), 'src'))
+# Load environment variables from .env file
+def load_env():
+    """Load environment variables from .env file if it exists"""
+    env_path = os.path.join(os.path.dirname(__file__), '.env')
+    if os.path.exists(env_path):
+        with open(env_path, 'r') as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith('#') and '=' in line:
+                    key, value = line.split('=', 1)
+                    os.environ[key] = value
 
-from src.agent.workflow import FormAgentWorkflow
-from src.evaluation.metrics import AgentEvaluator
-from langchain_core.messages import HumanMessage, AIMessage, BaseMessage
+# Add src to path for imports
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
 
-class FormAgentCLI:
-    def __init__(self, model_provider: str = "openai"):
-        """Initialize the Form Agent CLI"""
-        self.agent = FormAgentWorkflow(model_provider)
-        self.evaluator = AgentEvaluator()
-        self.conversation_history = []  # List of BaseMessage objects
-        
-    def print_welcome(self):
-        """Print welcome message"""
-        print("🔧 Form Management AI Agent")
-        print("=" * 50)
-        print("I can help you modify forms, fields, options, and logic rules.")
-        print("Just describe what you want to do in natural language!")
-        print()
-        print("Examples:")
-        print("• 'Add a Paris option to the destination field in travel form'")
-        print("• 'Create a new field for phone number in contact form'") 
-        print("• 'Make university name required when employment status is Student'")
-        print()
-        print("Commands:")
-        print("• 'exit' or 'quit' - Exit the program")
-        print("• 'help' - Show this help message")
-        print("• 'eval' - Run baseline evaluation")
-        print("• 'clear' - Clear conversation history")
-        print("=" * 50)
-        print()
+def print_banner():
+    """Print welcome banner"""
+    print("=" * 70)
+    print("🚀 ENTERPRISE FORM MANAGEMENT AGENT SYSTEM")
+    print("=" * 70)
+    print("Interactive Terminal Chat Interface")
+    print()
+    print("This agent can help you:")
+    print("• Add/modify fields in forms")  
+    print("• Create new forms with validation")
+    print("• Add dropdown options and logic rules")
+    print("• Generate precise database changesets")
+    print()
+    print("Type 'help' for commands, 'quit' to exit")
+    print("💡 Real-time file logging ENABLED - all agent reasoning saved to timestamped files")
+    print("💡 Use 'files' command to see log file locations and tail command")
+    print("-" * 70)
+
+def print_help():
+    """Print help information"""
+    print()
+    print("📖 AVAILABLE COMMANDS:")
+    print("  help          - Show this help message")
+    print("  quit/exit     - Exit the chat")
+    print("  status        - Show agent system status")
+    print("  memory        - Show context memory summary")
+    print("  clear         - Clear the screen")
+    print("  logs          - Toggle detailed logging output")
+    print("  debug         - Show debug logging level")
+    print("  sdk           - Toggle OpenAI Agents SDK verbose logging")
+    print("  files         - Show file logging session info")
+    print()
+    print("💬 EXAMPLE QUERIES:")
+    print("  'Add an email field to the contact form'")
+    print("  'Create a customer feedback form with rating dropdown'")
+    print("  'Add validation to prevent duplicate emails'")
+    print("  'What forms exist in the database?'")
+    print()
+
+def print_status(agent):
+    """Print agent system status"""
+    print()
+    print("🔧 AGENT SYSTEM STATUS:")
+    print(f"  Master Agent: ✅ Ready")
+    print(f"  Model: {agent.model}")
+    print(f"  Database: {agent.db_path}")
+    print(f"  Tools Available: {len(agent.agent.tools)}")
+    print()
     
-    def print_help(self):
-        """Print help message"""
-        print("\n📖 Help - Form Management Operations")
-        print("-" * 40)
-        print("This agent can handle these types of operations:")
-        print()
-        print("🏷️  OPTIONS:")
-        print("   • Add new options to dropdown/radio fields")
-        print("   • Update existing option values/labels")
-        print("   • Remove options from fields")
-        print()
-        print("📝 FIELDS:")
-        print("   • Add new fields to forms")
-        print("   • Modify field properties (label, type, required, etc.)")
-        print("   • Remove fields from forms")
-        print()
-        print("🔀 LOGIC RULES:")
-        print("   • Add conditional logic (show/hide/require fields)")
-        print("   • Modify existing logic rules")
-        print("   • Remove logic rules")
-        print()
-        print("📋 FORMS:")
-        print("   • Create new forms")
-        print("   • Update form properties")
-        print("   • Delete forms")
-        print()
-        print("The agent will output structured JSON changes that can be")
-        print("applied to the database tables.")
-        print("-" * 40)
-        print()
+    # Show subagent status
+    print("  Subagents:")
+    print("    • Ask Clarification Agent: ✅ Ready")
+    print("    • Database Context Agent: ✅ Ready") 
+    print("    • Validator Agent: ✅ Ready")
+    print("    • Context Memory: ✅ Ready")
+    print()
+
+def print_memory_summary(agent):
+    """Print context memory summary"""
+    print()
+    print("🧠 CONTEXT MEMORY SUMMARY:")
+    summary = agent.get_memory_summary()
     
-    def format_json_output(self, data: Dict[str, Any]) -> str:
-        """Format JSON output for display"""
-        return json.dumps(data, indent=2, ensure_ascii=False)
+    if summary.get('categories'):
+        for category, info in summary['categories'].items():
+            print(f"  {category}: {info['count']} items")
+    else:
+        print("  No stored context yet")
+    print()
+
+def format_response(result: Dict) -> str:
+    """Format agent response for display"""
+    if result.get('error'):
+        return f"❌ Error: {result['error']}"
     
-    def process_user_input(self, user_input: str) -> Optional[Dict[str, Any]]:
-        """Process user input and return response"""
-        
-        # Handle commands
-        if user_input.lower().strip() in ['exit', 'quit']:
-            return None
-        elif user_input.lower().strip() == 'help':
-            self.print_help()
-            return {"command": "help"}
-        elif user_input.lower().strip() == 'eval':
-            return self.run_evaluation()
-        elif user_input.lower().strip() == 'clear':
-            self.conversation_history = []
-            print("📝 Conversation history cleared.")
-            return {"command": "clear"}
-        
-        # Process query with agent
-        print("🤖 Processing your request...")
-        print("-" * 30)
-        
-        try:
-            # Process the message using the new method with conversation history
-            result = self.agent.process_message(user_input, self.conversation_history)
-            
-            if result["success"]:
-                # Update conversation history with the new messages
-                self.conversation_history = result["messages"]
-                
-                # Extract the latest AI response for CLI compatibility
-                ai_messages = [msg for msg in result["messages"] if isinstance(msg, AIMessage)]
-                if ai_messages:
-                    latest_response = ai_messages[-1].content
-                    
-                    # Try to parse JSON from the response if it contains JSON
-                    import re
-                    json_match = re.search(r'```json\n(.*?)\n```', latest_response, re.DOTALL)
-                    if json_match:
-                        try:
-                            return json.loads(json_match.group(1))
-                        except:
-                            pass
-                    
-                    # Return as clarification needed or simple message
-                    if "I need more information" in latest_response:
-                        questions = []
-                        for line in latest_response.split('\n'):
-                            if line.strip() and (line.strip()[0].isdigit() or line.strip().startswith('•')):
-                                questions.append(line.strip())
-                        return {
-                            "clarification_needed": True,
-                            "questions": questions
-                        }
-                    else:
-                        return {"message": latest_response}
-                
-                return {"error": "No response generated"}
-            else:
-                return {"error": result.get("error", "Unknown error")}
-            
-        except Exception as e:
-            error_result = {"error": f"An error occurred: {str(e)}"}
-            # Add error to conversation history as messages
-            human_msg = HumanMessage(content=user_input)
-            ai_msg = AIMessage(content=f"I'm sorry, I encountered an error: {str(e)}")
-            self.conversation_history.extend([human_msg, ai_msg])
-            return error_result
+    elif result.get('success') and result.get('changeset'):
+        changeset = result['changeset']
+        response = "✅ SUCCESS! Generated changeset:\n\n"
+        response += json.dumps(changeset, indent=2)
+        return response
     
-    def display_result(self, result: Dict[str, Any]):
-        """Display the agent's response"""
-        
-        if "command" in result:
-            return  # Commands are handled in process_user_input
-        
-        if "error" in result:
-            print("❌ Error:")
-            print(f"   {result['error']}")
-            if "errors" in result:
-                for error in result["errors"]:
-                    print(f"   • {error}")
-        
-        elif "clarification_needed" in result:
-            print("❓ I need more information:")
-            for question in result.get("questions", []):
-                print(f"   • {question}")
-            print()
-            print("Please provide more details and try again.")
-        
-        else:
-            print("✅ Generated Database Changes:")
-            print(self.format_json_output(result))
-        
-        print("-" * 30)
-        print()
+    elif result.get('needs_clarification'):
+        questions = result.get('questions', [])
+        response = "❓ Need clarification:\n\n"
+        for i, q in enumerate(questions, 1):
+            response += f"{i}. {q.get('question', 'No question')}\n"
+            if q.get('context'):
+                response += f"   Context: {q['context']}\n"
+        return response
     
-    def run_evaluation(self) -> Dict[str, Any]:
-        """Run baseline evaluation"""
-        print("🧪 Running baseline evaluation...")
-        print("-" * 30)
-        
-        try:
-            eval_results = self.evaluator.run_baseline_evaluation(self.agent)
-            
-            print(f"📊 Evaluation Results:")
-            print(f"   Overall Score: {eval_results['overall_score']:.2%}")
-            print(f"   Passed Examples: {eval_results['passed_examples']}/{eval_results['total_examples']}")
-            print()
-            
-            print("📈 Metric Breakdown:")
-            for metric, score in eval_results['metric_scores'].items():
-                print(f"   {metric}: {score:.2%}")
-            
-            print("-" * 30)
-            print()
-            
-            return eval_results
-            
-        except Exception as e:
-            error_result = {"error": f"Evaluation failed: {str(e)}"}
-            print(f"❌ {error_result['error']}")
-            return error_result
+    elif result.get('response'):
+        return f"💬 {result['response']}"
     
-    def run(self):
-        """Run the interactive CLI"""
-        
-        self.print_welcome()
-        
-        while True:
-            try:
-                # Get user input
-                user_input = input("💬 Your request: ").strip()
-                
-                if not user_input:
-                    continue
-                
-                # Process input
-                result = self.process_user_input(user_input)
-                
-                # Exit if requested
-                if result is None:
-                    print("👋 Goodbye!")
-                    break
-                
-                # Display result
-                self.display_result(result)
-                
-            except KeyboardInterrupt:
-                print("\n👋 Goodbye!")
-                break
-            except EOFError:
-                print("\n👋 Goodbye!")
-                break
-            except Exception as e:
-                print(f"❌ Unexpected error: {e}")
-                print("Please try again.")
+    else:
+        return f"📄 {json.dumps(result, indent=2)}"
 
 def main():
-    """Main entry point"""
+    """Main interactive chat loop"""
+    # Load environment variables
+    load_env()
     
-    # Check for command line arguments
-    if len(sys.argv) > 1:
-        if sys.argv[1] in ['-h', '--help']:
-            print("Usage: python main.py [options]")
-            print()
-            print("Options:")
-            print("  -h, --help     Show this help message")
-            print("  --eval         Run evaluation and exit")
-            print("  --model MODEL  Choose model provider (openai|anthropic)")
+    print_banner()
+    
+    # Initialize logging settings
+    show_logs = True  # Show logs by default to demonstrate agent thinking
+    debug_mode = False
+    verbose_sdk_logging = True  # Enable OpenAI Agents SDK verbose logging
+    file_logging_enabled = True  # Enable real-time file logging
+    
+    # Check for OpenAI API key
+    if not os.getenv('OPENAI_API_KEY'):
+        print("⚠️  WARNING: OPENAI_API_KEY not found in environment variables")
+        print("   The agent will not be able to use LLM reasoning without an API key.")
+        print("   You can still test the basic structure and individual components.")
+        print()
+        
+        response = input("Continue anyway? (y/n): ").strip().lower()
+        if response != 'y':
+            print("Please set your OpenAI API key and try again:")
+            print("export OPENAI_API_KEY='your-key-here'")
             return
-        elif sys.argv[1] == '--eval':
-            # Run evaluation only
-            model_provider = "openai"
-            if "--model" in sys.argv:
-                model_idx = sys.argv.index("--model")
-                if model_idx + 1 < len(sys.argv):
-                    model_provider = sys.argv[model_idx + 1]
+        print()
+    
+    # Check database
+    if not os.path.exists("data/forms.sqlite"):
+        print("❌ ERROR: Database file 'data/forms.sqlite' not found")
+        print("   Please ensure the database file exists before starting.")
+        return
+    
+    # Setup file logging if enabled
+    file_logger = None
+    if file_logging_enabled:
+        try:
+            from src.utils.file_logger import setup_file_logging
+            file_logger = setup_file_logging(minimal_console=True)
+        except Exception as e:
+            print(f"⚠️  WARNING: Failed to setup file logging: {e}")
+            print("   Continuing with console logging only...")
+
+    # Initialize the master agent
+    try:
+        print("🔄 Initializing agent system...")
+        from src.agent.master_agent import create_master_agent
+        
+        agent = create_master_agent(model="gpt-4o", db_path="data/forms.sqlite", verbose_logging=verbose_sdk_logging)
+        print("✅ Agent system ready!\n")
+        
+    except Exception as e:
+        print(f"❌ ERROR: Failed to initialize agent system: {e}")
+        print("   Please check your setup and try again.")
+        if file_logger:
+            from src.utils.file_logger import cleanup_file_logging
+            cleanup_file_logging()
+        return
+    
+    # Main chat loop
+    while True:
+        try:
+            # Get user input
+            user_input = input("👤 You: ").strip()
             
-            cli = FormAgentCLI(model_provider)
-            cli.run_evaluation()
-            return
+            if not user_input:
+                continue
+            
+            # Handle commands
+            if user_input.lower() in ['quit', 'exit']:
+                print("👋 Goodbye!")
+                break
+            
+            elif user_input.lower() == 'help':
+                print_help()
+                continue
+            
+            elif user_input.lower() == 'status':
+                print_status(agent)
+                continue
+            
+            elif user_input.lower() == 'memory':
+                print_memory_summary(agent)
+                continue
+                
+            elif user_input.lower() == 'logs':
+                show_logs = not show_logs
+                status = "ENABLED" if show_logs else "DISABLED"
+                print(f"🔧 Detailed logging {status}")
+                continue
+            
+            elif user_input.lower() == 'debug':
+                debug_mode = not debug_mode
+                status = "ENABLED" if debug_mode else "DISABLED"
+                print(f"🔧 Debug mode {status}")
+                continue
+                
+            elif user_input.lower() == 'sdk':
+                verbose_sdk_logging = not verbose_sdk_logging
+                status = "ENABLED" if verbose_sdk_logging else "DISABLED"
+                print(f"🔧 SDK verbose logging {status}")
+                print("   Note: Restart required for SDK logging changes to take effect")
+                continue
+                
+            elif user_input.lower() == 'files':
+                if file_logger:
+                    info = file_logger.get_session_info()
+                    print("📁 File Logging Session Info:")
+                    print(f"   Session ID: {info['session_id']}")
+                    print(f"   Session Directory: {info['session_dir']}")
+                    print(f"   Combined Log: {info['combined_log']}")
+                    print(f"   Tail Command: {file_logger.tail_command()}")
+                else:
+                    print("📁 File logging is not enabled")
+                continue
+            
+            elif user_input.lower() == 'clear':
+                os.system('clear' if os.name == 'posix' else 'cls')
+                print_banner()
+                continue
+            
+            # Process query with agent
+            if show_logs:
+                print("🤖 Agent: Processing your request (detailed logging enabled)...")
+                print("═" * 60)
+            else:
+                print("🤖 Agent: Processing your request...")
+            
+            try:
+                # Set logging level based on settings
+                if debug_mode:
+                    import logging
+                    logging.getLogger().setLevel(logging.DEBUG)
+                elif show_logs:
+                    import logging
+                    logging.getLogger().setLevel(logging.INFO)
+                else:
+                    import logging
+                    logging.getLogger().setLevel(logging.ERROR)
+                
+                result = agent.process_query(user_input)
+                
+                if show_logs:
+                    print("═" * 60)
+                
+                response = format_response(result)
+                print(f"🤖 Agent: {response}")
+                
+            except Exception as e:
+                if show_logs:
+                    print("═" * 60)
+                print(f"🤖 Agent: ❌ Error processing query: {e}")
+                if debug_mode:
+                    import traceback
+                    print("🔍 Debug traceback:")
+                    traceback.print_exc()
+            
+            print()
+            
+        except KeyboardInterrupt:
+            print("\n👋 Goodbye!")
+            break
+        except Exception as e:
+            print(f"💥 Unexpected error: {e}")
+            continue
     
-    # Determine model provider
-    model_provider = "openai"  # Default
-    if "--model" in sys.argv:
-        model_idx = sys.argv.index("--model")
-        if model_idx + 1 < len(sys.argv):
-            model_provider = sys.argv[model_idx + 1]
-    
-    # Run interactive CLI
-    cli = FormAgentCLI(model_provider)
-    cli.run()
+    # Cleanup file logging
+    # if file_logger:
+    #     from src.utils.file_logger import cleanup_file_logging
+    #     cleanup_file_logging()
 
 if __name__ == "__main__":
     main()
