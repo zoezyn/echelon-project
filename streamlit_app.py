@@ -81,6 +81,10 @@ def initialize_session_state():
     
     if "agent_initialized" not in st.session_state:
         st.session_state.agent_initialized = False
+    
+    if "session_id" not in st.session_state:
+        import uuid
+        st.session_state.session_id = f"streamlit_{uuid.uuid4().hex[:8]}"
 
 def initialize_agent(model: str, db_path: str, verbose_logging: bool = False) -> bool:
     """Initialize the master agent"""
@@ -89,7 +93,8 @@ def initialize_agent(model: str, db_path: str, verbose_logging: bool = False) ->
             st.session_state.master_agent = create_master_agent(
                 model=model,
                 db_path=db_path,
-                verbose_logging=verbose_logging
+                verbose_logging=verbose_logging,
+                session_id=st.session_state.session_id
             )
             st.session_state.agent_initialized = True
             st.success(" Agent system initialized successfully!")
@@ -146,7 +151,7 @@ def process_user_query(query: str) -> Dict[str, Any]:
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
         
-        # Process the query
+        # Process the query - session memory will handle conversation history automatically
         result = st.session_state.master_agent.process_query(query)
         return result
     except Exception as e:

@@ -7,6 +7,7 @@ providing context needed for intelligent decision making about form modification
 
 import sqlite3
 import json
+from difflib import SequenceMatcher
 from typing import Dict, List, Optional, Any
 from agents import Agent, function_tool, Runner
 
@@ -91,10 +92,12 @@ When asked to explore form creation, you MUST examine ALL these tables:
 - **get_logic_rules**: Get information about logic rules and conditions
 
 ### For exploring database structure and content:
+- **discover_relationships**: Find foreign key relationships
+
+### For general information: (Only use them when necessary)
 - **get_db_schema**: Get complete database schema with tables and columns
 - **list_tables**: List all tables in the database
 - **get_table_sample**: Get sample rows from any table
-- **discover_relationships**: Find foreign key relationships
 
 ## Core Responsibilities
 
@@ -291,6 +294,43 @@ DO NOT abbreviate, filter, or summarize the schema information. Return the compl
     def _get_db_connection(self):
         """Get database connection"""
         return sqlite3.connect(self.db_path)
+    
+    def _calculate_similarity(self, text1: str, text2: str) -> float:
+        """Calculate similarity between two strings using SequenceMatcher"""
+        return SequenceMatcher(None, text1.lower(), text2.lower()).ratio()
+    
+    def find_similar_forms(self, query: str, limit: int = 3) -> List[Dict[str, Any]]:
+        """Find forms with semantic similarity to the query"""
+        with self._get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM forms WHERE status = 'published'")
+            
+            # Get column names
+            cursor.execute("PRAGMA table_info(forms)")
+            columns = [col[1] for col in cursor.fetchall()]
+            
+            # Get form data
+            cursor.execute("SELECT * FROM forms WHERE status = 'published'")
+            rows = cursor.fetchall()
+            all_forms = [dict(zip(columns, row)) for row in rows]
+        
+        # Calculate similarity scores
+        form_similarities = []
+        for form in all_forms:
+            # Check similarity against title, slug, and description
+            title_sim = self._calculate_similarity(query, form['title'] or '')
+            slug_sim = self._calculate_similarity(query, form['slug'] or '')
+            desc_sim = self._calculate_similarity(query, form['description'] or '') if form.get('description') else 0
+            
+            # Use the highest similarity score
+            max_sim = max(title_sim, slug_sim, desc_sim)
+            
+            if max_sim > 0.3:  # Only include if similarity is above threshold
+                form_similarities.append((form, max_sim))
+        
+        # Sort by similarity score and return top results
+        form_similarities.sort(key=lambda x: x[1], reverse=True)
+        return [form for form, _ in form_similarities[:limit]]
 
     def get_db_schema(self) -> Dict:
         """Get complete database schema"""
@@ -400,20 +440,25 @@ DO NOT abbreviate, filter, or summarize the schema information. Return the compl
             with self._get_db_connection() as conn:
                 cursor = conn.cursor()
                 
-                if form_id:
-                    cursor.execute("SELECT * FROM forms WHERE id = ?", (form_id,))
-                elif form_name:
-                    # Use fuzzy matching with LIKE for form_name
-                    cursor.execute("SELECT * FROM forms WHERE slug LIKE ? OR title LIKE ? OR description LIKE ? LIMIT ?", 
-                                 (f"%{form_name}%", f"%{form_name}%", f"%{form_name}%", limit))
-                else:
-                    cursor.execute("SELECT * FROM forms LIMIT ?", (limit,))
-                
-                rows = cursor.fetchall()
-                
-                # Get column names
+                # Get column names first
                 cursor.execute("PRAGMA table_info(forms)")
                 columns = [col[1] for col in cursor.fetchall()]
+                
+                if form_id:
+                    cursor.execute("SELECT * FROM forms WHERE id = ?", (form_id,))
+                    rows = cursor.fetchall()
+                elif form_name:
+                    # Use similarity matching for better form finding
+                    similar_forms = self.find_similar_forms(form_name, limit)
+                    
+                    # Convert back to the format expected by the rest of the method
+                    rows = []
+                    for form in similar_forms:
+                        row = tuple(form.get(col) for col in columns)
+                        rows.append(row)
+                else:
+                    cursor.execute("SELECT * FROM forms LIMIT ?", (limit,))
+                    rows = cursor.fetchall()
                 
                 forms = [dict(zip(columns, row)) for row in rows]
                 return {"forms": forms}

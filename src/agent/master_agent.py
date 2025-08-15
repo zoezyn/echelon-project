@@ -12,7 +12,7 @@ import uuid
 import logging
 import os
 from typing import Dict, List, Any
-from agents import Agent, function_tool, Runner, enable_verbose_stdout_logging
+from agents import Agent, function_tool, Runner, enable_verbose_stdout_logging, SQLiteSession
 from .ask_clarification_agent import AskClarificationAgent
 from .database_context_agent import DatabaseContextAgent
 from .validator_agent import ValidatorAgent
@@ -29,9 +29,13 @@ class MasterAgent:
     subagents to achieve the desired database modifications.
     """
     
-    def __init__(self, model="gpt-5", db_path="data/forms.sqlite", verbose_logging=True):
+    def __init__(self, model="gpt-5", db_path="data/forms.sqlite", verbose_logging=True, session_id=None):
         self.db_path = db_path
         self.model = model
+        self.session_id = session_id or f"master_agent_{uuid.uuid4().hex[:8]}"
+        
+        # Initialize session for conversation memory
+        self.session = SQLiteSession(self.session_id, "agent_conversations.db")
         
         # Initialize logging first
         self.logger = get_agent_logger("MasterAgent", "DEBUG")
@@ -369,8 +373,9 @@ Always output valid JSON in this exact structure:
                 result = await Runner.run(
                     self.clarification_agent.agent,
                     input=user_query,
-                    max_turns=3
+                    max_turns=2
                 )
+                
                 return str(result.final_output) if result.final_output else "No clarification response received"
             except Exception as e:
                 return f"Error running clarification agent: {str(e)}"
@@ -383,6 +388,9 @@ Always output valid JSON in this exact structure:
                 exploration_request: Detailed description of what database information is needed
             """
             try:
+                self.logger.log_step("Running database context agent", {
+                    "exploration_request": exploration_request
+                })
                 result = await Runner.run(
                     self.db_context_agent.agent,
                     input=exploration_request,
@@ -436,15 +444,17 @@ Always output valid JSON in this exact structure:
             self.logger.log_thinking("Preparing message for LLM agent...")
             log_json_pretty(self.logger, "MESSAGE TO AGENT", {"message": message}, "DEBUG")
             
-            # Use the OpenAI Agents SDK Runner to process the message
-            self.logger.log_step("Calling Runner.run_sync with agent", {
+            # Use the OpenAI Agents SDK Runner to process the message with session memory
+            self.logger.log_step("Calling Runner.run_sync with agent and session", {
                 "agent_name": self.agent.name,
-                "model": self.model
+                "model": self.model,
+                "session_id": self.session_id
             })
             
             result = Runner.run_sync(
                 self.agent,
-                input=message
+                input=message,
+                session=self.session
             )
             
             # Log detailed result structure for debugging
@@ -600,6 +610,6 @@ Always output valid JSON in this exact structure:
         return self.context_memory.get_memory_summary()
 
 
-def create_master_agent(model="gpt-4", db_path="data/forms.sqlite", verbose_logging=True) -> MasterAgent:
+def create_master_agent(model="gpt-4", db_path="data/forms.sqlite", verbose_logging=True, session_id=None) -> MasterAgent:
     """Factory function to create a configured master LLM agent"""
-    return MasterAgent(model=model, db_path=db_path, verbose_logging=verbose_logging)
+    return MasterAgent(model=model, db_path=db_path, verbose_logging=verbose_logging, session_id=session_id)
