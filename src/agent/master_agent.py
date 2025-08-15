@@ -52,8 +52,8 @@ class MasterAgent:
             openai_agents_logger = logging.getLogger("openai.agents")
             openai_tracing_logger = logging.getLogger("openai.agents.tracing")
             
-            openai_agents_logger.setLevel(logging.INFO)
-            openai_tracing_logger.setLevel(logging.INFO)
+            openai_agents_logger.setLevel(logging.DEBUG)
+            openai_tracing_logger.setLevel(logging.DEBUG)
 
         # Initialize subagents
         self.clarification_agent = AskClarificationAgent(model=model)
@@ -86,43 +86,6 @@ class MasterAgent:
             return {}
         
     def _get_instructions(self):
-        # Include database schema in instructions if available
-        schema_context = ""
-        if self.db_schema and "tables" in self.db_schema:
-            schema_context = f"""
-
-## Database Schema Context
-
-You have access to the complete database schema with exact table names and column structures:
-
-**Available Tables:**
-{', '.join(self.db_schema["tables"].keys())}
-
-**Key Tables for Common Operations:**
-- **option_items**: For modifying dropdown/radio button choices (not "options")
-- **form_fields**: For modifying form field properties (not "fields") 
-- **logic_rules**: For form logic rules
-- **logic_conditions**: For rule conditions
-- **logic_actions**: For rule actions
-- **forms**: For form metadata
-- **form_pages**: For form page structure
-- **option_sets**: For grouping options
-- **field_option_binding**: For linking fields to option sets
-
-**COMPLETE FORM CREATION REQUIRES ALL OF:**
-1. **forms** - form metadata
-2. **form_pages** - page structure (fields belong to pages)
-3. **form_fields** - field definitions
-4. **field_types** - field type references
-5. **option_sets** - dropdown option groups
-6. **option_items** - individual dropdown choices
-7. **field_option_binding** - connects dropdown fields to option sets
-
-**Table Relationships:**
-{json.dumps(self.db_schema.get("relationships", []), indent=2)}
-
-CRITICAL: Always use these EXACT table names in your changesets. Never assume or guess table names.
-"""
         
         return f"""# Enterprise Form Management Master Agent
 
@@ -148,7 +111,6 @@ Key relationships:
 - Forms contain Pages contain Fields
 - Fields reference Option Sets for choices
 - Logic Rules contain Conditions and Actions
-- All operations must respect foreign key constraints{schema_context}
 
 ## Available Tools
 
@@ -171,37 +133,55 @@ Store information in context memory for later use.
 ### generate_changeset
 Generate the final changeset based on all gathered information.
 
-Notice: when calling tools, provide a concrete description of what you need, for example: the `get_database_context` tool should be called with a clear request like "Find the destination field in travel request form and its option set".
-## Working Process
 
-1. **Understand**: Classify the query and identify affected components
-2. **Plan**: Develop a strategic approach using your reasoning abilities
-3. **ALWAYS EXPLORE FIRST**: Use get_database_context tool to gather current schema, data, and context - this is MANDATORY before generating any changeset
-4. **Clarify**: Use ask_clarification tool if requirements are unclear after exploration
-5. **Generate**: Create the database changeset using your expertise and the explored context
-7. **Output**: Return clean JSON with proper structure
+## CRITICAL RULE: 
 
-## CRITICAL RULE: ALWAYS EXPLORE DATABASE FIRST
+### ALWAYS EXPLORE DATABASE FIRST
 
-Before generating any changeset, you MUST use the get_database_context tool to:
+Before generating any changeset, you should use the get_database_context tool to:
 - Understand the current database schema
-- See existing data structures  
 - Identify correct table names and column names
 - FOR UPDATES: Find existing records that need to be modified
 - FOR CREATION: Explore table structure, required fields, field types, and creation patterns
 - Understand relationships between tables
 
-## CRITICAL RULE: ALWAYS IDENTIFY THE CORRECT TARGET TABLE
+### ALWAYS IDENTIFY THE CORRECT TARGET TABLE
 
 When generating a changeset, you MUST:
 - Use the EXACT table names discovered during exploration
-- Never assume table names - always use what you found in the database
 - Ensure the changeset table key matches the actual database table name
-- For option modifications, use "option_items" (not "options" or "option_set_items")
-- For form field modifications, use "form_fields" (not "fields")
-- For logic rule modifications, use "logic_rules", "logic_conditions", "logic_actions"
+- **ALWAYS consider dependent tables and foreign key relationships**
+- INCLUDE ALL REQUIRED FIELDS for each inserted/updated row.
 
-Failure to explore first will result in incorrect column names, table structures, and invalid changesets.
+
+## Guidelines
+
+- Decompose user queries into subtasks and describes them to those subagents when needed. Each subagent needs an objective, an output format, guidance on the tools and sources to use, and clear task boundaries.
+- Use tools proactively to understand context before making assumptions
+- Use placeholder IDs (starting with $) for new records
+- For update and delete, you must provide the exact existing id from the corresponding table.
+
+
+## Examples
+
+### UPDATE Example
+- **User Query**: "update the dropdown options for the destination field in the travel request form: 1. add a paris option, 2. change tokyo to wuhan"
+  **Your internal reasoning**: User wants to MODIFY existing dropdown options. Need to find existing records to update.
+  **Call get_database_context tool**: "User wants to update the dropdown options for the destination field in the travel request form. Find the destination field in travel request form and its option set. Return COMPLETE row data for the form, field, option_set, and all existing option_items including the Tokyo option if it exists."
+  **Generate changeset**: Use found records to update existing option and insert new option.
+
+### CREATE Example  
+- **User Query**: "I want to create a new form for snack requests. There should be a category field (ice cream/beverage/fruit/chips/gum) and name field (text)."
+  **Your internal reasoning**: User wants to CREATE new form with dropdown and text fields. Need complete workflow including pages and field-option bindings.
+  **Call get_database_context tool**: "User wants to create a new form with dropdown and text fields. Explore the complete structure for creating new forms with fields and dropdowns. Return schemas and sample data for ALL required tables: forms, form_pages, form_fields, field_types, option_sets, option_items, and field_option_binding. Show how dropdown fields connect to option sets via field_option_binding."
+  **Generate changeset**: Create records in correct dependency order with all required intermediate tables.
+
+### DELETE Example
+- **User Query**: "delete all forms"
+  **Your internal reasoning**: User wants to DELETE all forms. This is a cascading operation that affects ALL tables with foreign key dependencies on forms.
+  **Call get_database_context tool**: "User wants to delete all forms. Find ALL forms in the database and identify EVERY table that has foreign key dependencies on forms. I need complete data for forms and ALL dependent tables including form_pages, form_fields, option_sets, option_items, field_option_binding, logic_rules, logic_conditions, logic_actions, and any other tables that reference forms. Return the complete dependency chain so I can delete in proper order."
+  **Generate changeset**: Delete all dependent records first, then forms last, respecting foreign key constraints. 
+
 
 ## Output Format
 
@@ -215,31 +195,6 @@ Always output valid JSON in this exact structure:
   }}
 }}
 ```
-
-## Guidelines
-
-- Use tools proactively to understand context before making assumptions
-- Prefer updates over inserts when modifying existing data
-- Only delete when explicitly requested
-- Use placeholder IDs (starting with $) for new records
-- Build understanding incrementally rather than trying to solve everything at once
-- Apply advanced reasoning to handle complex multi-step requirements
-- Always decompose user queries into subtasks and describes them to those subagents when needed. Each subagent needs an objective, an output format, guidance on the tools and sources to use, and clear task boundaries.
-
-## Examples
-
-### UPDATE Example
-- **User Query**: "update the dropdown options for the destination field in the travel request form: 1. add a paris option, 2. change tokyo to wuhan"
-  **Your internal reasoning**: User wants to MODIFY existing dropdown options. Need to find existing records to update.
-  **Call get_database_context tool**: "Find the destination field in travel request form and its option set. Return COMPLETE row data for the form, field, option_set, and all existing option_items including the Tokyo option if it exists."
-  **Generate changeset**: Use found records to update existing option and insert new option.
-
-### CREATE Example  
-- **User Query**: "I want to create a new form for snack requests. There should be a category field (ice cream/beverage/fruit/chips/gum) and name field (text)."
-  **Your internal reasoning**: User wants to CREATE new form with dropdown and text fields. Need complete workflow including pages and field-option bindings.
-  **Call get_database_context tool**: "Explore the complete structure for creating new forms with fields and dropdowns. Return schemas and sample data for ALL required tables: forms, form_pages, form_fields, field_types, option_sets, option_items, and field_option_binding. Show how dropdown fields connect to option sets via field_option_binding."
-  **Generate changeset**: Create records in correct dependency order with all required intermediate tables. 
-
 """
 
     def _create_function_tools(self) -> List:

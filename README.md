@@ -114,7 +114,6 @@ The system employs a **master agent coordination pattern** with specialized suba
 
 - Improve guardrails: combine multiple methods (LLM, regex, etc.) to ensure agent responses stay within the intended scope, no harmful input/output and jailbreaks
 
-- Improve prompt: sometimes the agent uses tools to get high level database information which is not needed. Improve prompt to carefully guide agent to use the correct tools. 
 
 - Structure output: currently the agent sometimes misses few column names in the output row for add/insert/delete. Use structured output add/or another layer to make sure the output contains full information.
 

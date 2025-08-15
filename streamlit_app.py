@@ -12,7 +12,7 @@ from src.agent.master_agent import create_master_agent
 
 # Page config
 st.set_page_config(
-    page_title="Enterprise Form Management Agent",
+    page_title="Enterprise Form Management Agent (Dynamic, built with openai agents sdk)",
     page_icon="🚀",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -114,7 +114,7 @@ if st.sidebar.button("🗑️ Clear Chat", type="secondary"):
     st.rerun()
 
 # Main interface
-st.title("🚀 Enterprise Form Management Agent")
+st.title("🚀 Enterprise Form Management Agent (Dynamic, built with openai agents sdk)")
 st.markdown("**Natural language interface for enterprise form management**")
 
 # Display chat messages

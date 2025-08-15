@@ -95,7 +95,6 @@ When asked to explore form creation, you MUST examine ALL these tables:
 ### For general information: (Only use them when necessary)
 - **get_db_schema**: Get complete database schema with tables and columns
 - **list_tables**: List all tables in the database
-- **get_table_sample**: Get sample rows from any table
 
 ## Core Responsibilities
 
@@ -105,29 +104,14 @@ When asked to explore form creation, you MUST examine ALL these tables:
 4. **Map relationships**: Understand how entities connect to each other
 5. **Sample intelligently**: Get representative data samples when needed
 6. **Follow foreign keys**: Always discover ALL related tables through foreign key relationships
-7. **Complete table coverage**: Don't miss intermediate tables that connect entities
+7. **Complete table coverage**: Find all intermediate tables that connect entities
 
-## CRITICAL REQUIREMENT: RETURN COMPLETE SCHEMAS AND RAW DATA
+## Return the EXACT table that are necessary with ALL REQUIRED FIELDS
 
-When exploring database structure for creation/modification, you MUST return:
-- **COMPLETE TABLE SCHEMAS**: Every single column with all properties (name, type, not_null, primary_key, default_value, etc.)
-- **COMPLETE ROW DATA**: All columns and values for sample records
-- **ALL RELEVANT TABLES**: Every table needed for the operation (don't filter out "less important" tables)
-- **EXACT FOREIGN KEYS**: Complete relationship information
-
-## NEVER FILTER OR SUMMARIZE SCHEMAS
-
-When the master agent asks for table schemas, return the EXACT schema from get_db_schema tool:
-- Include ALL columns, even if they seem "optional"
-- Include ALL properties for each column
-- Don't decide which columns are "important" - return everything
-- Don't truncate or abbreviate schema information
-
-This is essential because the master agent needs complete schema information to generate valid changesets with:
-- All required fields populated correctly
+This is essential because the master agent needs complete information to generate valid changesets with:
+- ALL REQUIRED FIELDS populated correctly
 - Proper column types and constraints
 - Complete foreign key references
-- All optional fields available for use
 
 ## Guidelines
 
@@ -141,34 +125,8 @@ This is essential because the master agent needs complete schema information to 
 
 For complex queries, you should generate a list plan steps first and execute them sequentially to gather all necessary context.
 
-## MANDATORY RESPONSE FORMAT
 
-For schema exploration requests, you MUST return this exact structure:
-```json
-{
-  "forms": {
-    "schema": [
-      {"name": "id", "type": "TEXT", "not_null": false, "primary_key": true, "default_value": null},
-      {"name": "slug", "type": "TEXT", "not_null": true, "primary_key": false, "default_value": null},
-      {"name": "title", "type": "TEXT", "not_null": true, "primary_key": false, "default_value": null},
-      ... EVERY SINGLE COLUMN FROM THE DATABASE
-    ],
-    "sample_records": [complete sample records with ALL columns]
-  },
-  "form_fields": {
-    "schema": [
-      {"name": "id", "type": "TEXT", "not_null": false, "primary_key": true, "default_value": null},
-      {"name": "form_id", "type": "TEXT", "not_null": true, "primary_key": false, "default_value": null},
-      {"name": "page_id", "type": "TEXT", "not_null": false, "primary_key": false, "default_value": null},
-      ... EVERY SINGLE COLUMN INCLUDING page_id, help_text, placeholder, created_at, updated_at, etc.
-    ],
-    "sample_records": [complete records]
-  },
-  ... ALL REQUESTED TABLES WITH COMPLETE SCHEMAS
-}
-```
-
-DO NOT abbreviate, filter, or summarize the schema information. Return the complete output from get_db_schema tool for the requested tables.
+DO NOT abbreviate, filter, or summarize the schema information. Return the complete output for the requested tables.
 
 """
 
@@ -193,19 +151,19 @@ DO NOT abbreviate, filter, or summarize the schema information. Return the compl
             except Exception as e:
                 return f"Error listing tables: {str(e)}"
         
-        @function_tool
-        def get_table_sample(table_name: str, limit: int = 5) -> str:
-            """Get sample rows from a specific table
+        # @function_tool
+        # def get_table_sample(table_name: str, limit: int = 5) -> str:
+        #     """Get sample rows from a specific table
             
-            Args:
-                table_name: Name of the table to sample
-                limit: Number of rows to return (default 5)
-            """
-            try:
-                result = self.get_table_sample(table_name, limit)
-                return json.dumps(result, indent=2)
-            except Exception as e:
-                return f"Error getting table sample: {str(e)}"
+        #     Args:
+        #         table_name: Name of the table to sample
+        #         limit: Number of rows to return (default 5)
+        #     """
+        #     try:
+        #         result = self.get_table_sample(table_name, limit)
+        #         return json.dumps(result, indent=2)
+        #     except Exception as e:
+        #         return f"Error getting table sample: {str(e)}"
         
         @function_tool
         def discover_relationships() -> str:
@@ -284,7 +242,7 @@ DO NOT abbreviate, filter, or summarize the schema information. Return the compl
         #         return f"Error describing context: {str(e)}"
         
         return [
-            get_db_schema, list_tables, get_table_sample, discover_relationships,
+            get_db_schema, list_tables, discover_relationships,
             get_forms, get_fields, get_options, get_logic_rules
         ]
 
