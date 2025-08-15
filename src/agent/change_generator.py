@@ -211,7 +211,7 @@ class ChangeGenerator:
         position = self.db.get_max_position('form_fields', 'form_id', form['id'])
         
         # Generate contextual placeholder using LLM if not provided
-        field_label = parsed_query.parameters.get('label', parsed_query.field_code.replace('_', ' ').title())
+        field_label = parsed_query.parameters.get('label', parsed_query.field_code)
         default_placeholder = None
         if not parsed_query.parameters.get('placeholder'):
             default_placeholder = self._generate_placeholder_with_llm(type_id, field_label, form['title'])
