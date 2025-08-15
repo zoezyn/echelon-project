@@ -6,3 +6,5 @@ streamlit>=1.28.0
 tabulate>=0.9.0
 openai>= 1.99.8
 openai-agents>=0.2.6
+langfuse>=3.2.6
+logfire>=0.0.1

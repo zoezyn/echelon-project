@@ -11,13 +11,14 @@ import json
 import uuid
 import logging
 import os
-from typing import Dict, List, Any
+from typing import Dict, List, Any, Optional
 from agents import Agent, function_tool, Runner, enable_verbose_stdout_logging, SQLiteSession
 from .ask_clarification_agent import AskClarificationAgent
 from .database_context_agent import DatabaseContextAgent
 from .validator_agent import ValidatorAgent
 from .context_memory import ContextMemory
 from ..utils.logger import get_agent_logger, log_json_pretty
+from ..utils.langfuse_config import setup_langfuse_logging, get_langfuse_client, create_trace, check_langfuse_status
 
 
 class MasterAgent:
@@ -40,6 +41,20 @@ class MasterAgent:
         # Initialize logging first
         self.logger = get_agent_logger("MasterAgent", "DEBUG")
         
+        # Setup Langfuse observability
+        self.langfuse_enabled = setup_langfuse_logging(f"enterprise_form_agent_{self.session_id}")
+        self.langfuse_client = get_langfuse_client() if self.langfuse_enabled else None
+        
+        if self.langfuse_enabled:
+            self.logger.log_step("Langfuse observability enabled", {
+                "session_id": self.session_id,
+                "status": check_langfuse_status()
+            })
+        else:
+            self.logger.log_step("Langfuse observability not available", {
+                "reason": "Missing credentials or dependencies"
+            })
+        
         # Load database schema
         schema_path = os.path.join(os.path.dirname(db_path), "database_schema.json")
         self.db_schema = self._load_database_schema(schema_path)
@@ -47,7 +62,8 @@ class MasterAgent:
             "model": model,
             "db_path": db_path,
             "schema_loaded": bool(self.db_schema),
-            "verbose_logging": verbose_logging
+            "verbose_logging": verbose_logging,
+            "langfuse_enabled": self.langfuse_enabled
         })
         
         # Enable OpenAI Agents SDK verbose logging
@@ -58,8 +74,8 @@ class MasterAgent:
             openai_agents_logger = logging.getLogger("openai.agents")
             openai_tracing_logger = logging.getLogger("openai.agents.tracing")
             
-            openai_agents_logger.setLevel(logging.DEBUG)
-            openai_tracing_logger.setLevel(logging.DEBUG)
+            openai_agents_logger.setLevel(logging.INFO)
+            openai_tracing_logger.setLevel(logging.INFO)
             
         
         # Initialize subagents
@@ -418,6 +434,32 @@ Always output valid JSON in this exact structure:
         # Generate unique query ID for tracking
         query_id = str(uuid.uuid4())
         
+        # Create Langfuse trace for this query
+        langfuse_trace = None
+        if self.langfuse_enabled and self.langfuse_client:
+            try:
+                langfuse_trace = create_trace(
+                    name="enterprise_form_agent_query",
+                    session_id=self.session_id,
+                    user_id=user_context.get("user_id") if user_context else None,
+                    metadata={
+                        "query_id": query_id,
+                        "model": self.model,
+                        "db_path": self.db_path,
+                        "user_context": user_context
+                    }
+                )
+                if langfuse_trace:
+                    langfuse_trace.update(
+                        input=user_query,
+                        metadata={"query_start": True}
+                    )
+                    # Flush to ensure trace is established
+                    if self.langfuse_client:
+                        self.langfuse_client.flush()
+            except Exception as e:
+                pass  # Silently handle trace creation errors
+        
         # Log query start
         self.logger.log_query_start(user_query, user_context)
         self.logger.log_thinking("Starting query analysis and planning...")
@@ -510,6 +552,23 @@ Always output valid JSON in this exact structure:
                                     "query_id": query_id
                                 }
                                 
+                                # Log successful completion to Langfuse
+                                if langfuse_trace:
+                                    try:
+                                        langfuse_trace.update(
+                                            output=result_dict,
+                                            metadata={
+                                                "success": True,
+                                                "result_type": "changeset",
+                                                "query_id": query_id
+                                            }
+                                        )
+                                        # Flush to ensure data is sent
+                                        if self.langfuse_client:
+                                            self.langfuse_client.flush()
+                                    except Exception as e:
+                                        pass  # Silently handle trace errors
+                                
                                 self.logger.log_query_end(result_dict, True)
                                 return result_dict
                             else:
@@ -531,17 +590,71 @@ Always output valid JSON in this exact structure:
                     "message": "Agent response - may contain clarification questions or analysis"
                 }
                 
+                # Log response completion to Langfuse
+                if langfuse_trace:
+                    try:
+                        langfuse_trace.update(
+                            output=result_dict,
+                            metadata={
+                                "success": True,
+                                "result_type": "response",
+                                "query_id": query_id
+                            }
+                        )
+                        # Flush to ensure data is sent
+                        if self.langfuse_client:
+                            self.langfuse_client.flush()
+                    except Exception as e:
+                        pass  # Silently handle trace errors
+                
                 self.logger.log_query_end(result_dict, True)
                 return result_dict
                 
             else:
                 error_dict = {"error": "No response received from agent"}
+                
+                # Log error to Langfuse
+                if langfuse_trace:
+                    try:
+                        langfuse_trace.update(
+                            output=error_dict,
+                            metadata={
+                                "success": False,
+                                "error_type": "no_response",
+                                "query_id": query_id
+                            }
+                        )
+                        # Flush to ensure data is sent
+                        if self.langfuse_client:
+                            self.langfuse_client.flush()
+                    except Exception as e:
+                        pass  # Silently handle trace errors
+                
                 self.logger.log_query_end(error_dict, False)
                 return error_dict
             
         except Exception as e:
             self.logger.log_error(e, "process_query")
             error_dict = {"error": f"Query processing failed: {str(e)}"}
+            
+            # Log exception to Langfuse
+            if langfuse_trace:
+                try:
+                    langfuse_trace.update(
+                        output=error_dict,
+                        metadata={
+                            "success": False,
+                            "error_type": "exception",
+                            "exception": str(e),
+                            "query_id": query_id
+                        }
+                    )
+                    # Flush to ensure data is sent
+                    if self.langfuse_client:
+                        self.langfuse_client.flush()
+                except Exception as trace_error:
+                    pass  # Silently handle trace errors
+            
             self.logger.log_query_end(error_dict, False)
             return error_dict
 
@@ -608,6 +721,52 @@ Always output valid JSON in this exact structure:
     def get_memory_summary(self) -> Dict:
         """Get a summary of stored context memory"""
         return self.context_memory.get_memory_summary()
+    
+    def get_langfuse_status(self) -> Dict[str, Any]:
+        """
+        Get current Langfuse observability status
+        
+        Returns:
+            Dictionary with Langfuse configuration and status details
+        """
+        return {
+            "enabled": self.langfuse_enabled,
+            "client_available": bool(self.langfuse_client),
+            "session_id": self.session_id,
+            "status": check_langfuse_status() if self.langfuse_enabled else None
+        }
+    
+    def log_user_feedback(self, query_id: str, score: float, comment: Optional[str] = None) -> bool:
+        """
+        Log user feedback for a specific query
+        
+        Args:
+            query_id: ID of the query to provide feedback for
+            score: Numerical score (0.0 to 1.0)
+            comment: Optional text comment
+            
+        Returns:
+            bool: True if feedback was logged successfully
+        """
+        if not self.langfuse_enabled or not self.langfuse_client:
+            self.logger.log_step("Cannot log user feedback - Langfuse not available")
+            return False
+        
+        try:
+            from ..utils.langfuse_config import log_user_feedback
+            log_user_feedback(query_id, score, comment)
+            self.logger.log_step("User feedback logged", {
+                "query_id": query_id,
+                "score": score,
+                "comment": comment
+            })
+            return True
+        except Exception as e:
+            self.logger.log_step("Failed to log user feedback", {
+                "query_id": query_id,
+                "error": str(e)
+            })
+            return False
 
 
 def create_master_agent(model="gpt-4", db_path="data/forms.sqlite", verbose_logging=True, session_id=None) -> MasterAgent:
