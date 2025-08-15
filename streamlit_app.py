@@ -1,330 +1,271 @@
-"""
-Interactive Streamlit Chatbot for Enterprise Form Management System
-
-This Streamlit app provides a conversational interface to interact with the
-enterprise form management system using natural language queries.
-"""
-
 import streamlit as st
+import sys
+import os
 import json
-import traceback
+import asyncio
 from datetime import datetime
-from typing import Dict, Any
 
-# Import the master agent
+# Add src to path
+sys.path.append(os.path.join(os.path.dirname(__file__), 'src'))
+
 from src.agent.master_agent import create_master_agent
 
-# Configure page
+# Page config
 st.set_page_config(
-    page_title="Form Management Chatbot",
-    page_icon=">",
+    page_title="Enterprise Form Management Agent",
+    page_icon="🚀",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
-# Custom CSS for better styling
+# Initialize session state
+if "messages" not in st.session_state:
+    st.session_state.messages = []
+
+if "agent" not in st.session_state:
+    st.session_state.agent = None
+
+if "session_id" not in st.session_state:
+    import uuid
+    st.session_state.session_id = f"streamlit_{uuid.uuid4().hex[:8]}"
+
+# Sidebar configuration
+st.sidebar.title("⚙️ Configuration")
+
+# Model selection
+model_provider = st.sidebar.selectbox(
+    "Choose AI Model",
+    ["gpt-4o"],
+    index=0,
+    help="Select which OpenAI model to use for processing"
+)
+
+# Database path
+db_path = st.sidebar.text_input(
+    "Database Path",
+    value="data/forms.sqlite",
+    help="Path to the SQLite database file"
+)
+
+# Verbose logging option
+verbose_logging = st.sidebar.checkbox(
+    "Enable Verbose Logging",
+    value=True,
+    help="Enable detailed logging for debugging"
+)
+
+# Initialize agent if not exists or settings changed
+current_config = f"{model_provider}_{db_path}_{verbose_logging}"
+if (st.session_state.agent is None or 
+    getattr(st.session_state, 'current_config', None) != current_config):
+    
+    try:
+        with st.sidebar:
+            with st.spinner("Initializing agent system..."):
+                st.session_state.agent = create_master_agent(
+                    model=model_provider,
+                    db_path=db_path,
+                    verbose_logging=verbose_logging,
+                    session_id=st.session_state.session_id
+                )
+                st.session_state.current_config = current_config
+        st.sidebar.success("✅ Agent system ready!")
+    except Exception as e:
+        st.sidebar.error(f"❌ Error initializing agent: {str(e)}")
+        st.sidebar.info("Please check your API keys and database path")
+
+# Sidebar info
+st.sidebar.markdown("---")
+st.sidebar.markdown("### 📖 What I can help with:")
+st.sidebar.markdown("""
+- **Forms**: Create, update, delete forms
+- **Fields**: Add, modify, remove form fields  
+- **Options**: Manage dropdown/radio options
+- **Logic Rules**: Add conditional logic
+- **Validation**: Check form constraints
+- **Database Operations**: Query and modify form data
+""")
+
+st.sidebar.markdown("### 💡 Example queries:")
+st.sidebar.markdown("""
+- "Add a Paris option to destinations field in travel request form"
+- "Create a new procurement form with vendor and budget fields"
+- "Update the employment form to require university when status is Student"
+- "Show me all forms in the database"
+""")
+
+# Agent status
+if st.session_state.agent:
+    st.sidebar.success(f"🤖 Agent Ready (Session: {st.session_state.session_id[:8]})")
+    
+    # Show Langfuse status if available
+    try:
+        langfuse_status = st.session_state.agent.get_langfuse_status()
+        if langfuse_status.get("enabled"):
+            st.sidebar.success("📊 Langfuse tracking enabled")
+        else:
+            st.sidebar.info("📊 Langfuse tracking disabled")
+    except:
+        pass
+
+# Clear chat button
+if st.sidebar.button("🗑️ Clear Chat", type="secondary"):
+    st.session_state.messages = []
+    st.rerun()
+
+# Main interface
+st.title("🚀 Enterprise Form Management Agent")
+st.markdown("**Natural language interface for enterprise form management**")
+
+# Display chat messages
+chat_container = st.container()
+
+with chat_container:
+    for message in st.session_state.messages:
+        if message["role"] == "user":
+            with st.chat_message("user"):
+                st.markdown(message["content"])
+        elif message["role"] == "assistant":
+            with st.chat_message("assistant"):
+                if message.get("type") == "error":
+                    st.error(message["content"])
+                elif message.get("type") == "success":
+                    st.success(message["content"])
+                elif message.get("changeset"):
+                    st.success("✅ **Changeset Generated Successfully!**")
+                    st.markdown("The following database operations will be performed:")
+                    st.json(message["changeset"])
+                else:
+                    st.markdown(message["content"])
+
+# Chat input
+if prompt := st.chat_input("Describe what you want to do with your forms..."):
+    if st.session_state.agent is None:
+        st.error("Please wait for the agent to initialize or check your API keys.")
+    else:
+        # Add user message to chat history
+        st.session_state.messages.append({
+            "role": "user", 
+            "content": prompt,
+            "timestamp": datetime.now().isoformat()
+        })
+        
+        with st.chat_message("user"):
+            st.markdown(prompt)
+        
+        # Process the message
+        with st.chat_message("assistant"):
+            with st.spinner("🤖 Processing your request..."):
+                try:
+                    # Fix for Streamlit: create new event loop if none exists
+                    try:
+                        loop = asyncio.get_event_loop()
+                    except RuntimeError:
+                        loop = asyncio.new_event_loop()
+                        asyncio.set_event_loop(loop)
+                    
+                    # Process the message through the master agent
+                    result = st.session_state.agent.process_query(prompt)
+                    
+                    if result.get("success") and result.get("changeset"):
+                        # Successful changeset generation
+                        st.session_state.messages.append({
+                            "role": "assistant",
+                            "content": "Changeset generated successfully!",
+                            "changeset": result["changeset"],
+                            "type": "success",
+                            "query_id": result.get("query_id"),
+                            "timestamp": datetime.now().isoformat()
+                        })
+                        
+                        st.success("✅ **Changeset Generated Successfully!**")
+                        st.markdown("The following database operations will be performed:")
+                        st.json(result["changeset"])
+                        
+                    elif result.get("error"):
+                        # Error response
+                        error_content = f"**Error:** {result['error']}"
+                        st.session_state.messages.append({
+                            "role": "assistant",
+                            "content": error_content,
+                            "type": "error",
+                            "timestamp": datetime.now().isoformat()
+                        })
+                        st.error(error_content)
+                        
+                    elif result.get("response"):
+                        # Agent response (clarification, analysis, etc.)
+                        st.session_state.messages.append({
+                            "role": "assistant",
+                            "content": result["response"],
+                            "type": "normal",
+                            "query_id": result.get("query_id"),
+                            "timestamp": datetime.now().isoformat()
+                        })
+                        st.markdown(result["response"])
+                        
+                    else:
+                        # Unexpected response format
+                        response_content = f"**Response:** {json.dumps(result, indent=2)}"
+                        st.session_state.messages.append({
+                            "role": "assistant",
+                            "content": response_content,
+                            "type": "normal",
+                            "timestamp": datetime.now().isoformat()
+                        })
+                        st.markdown(response_content)
+                        
+                except Exception as e:
+                    error_msg = f"An error occurred: {str(e)}"
+                    st.session_state.messages.append({
+                        "role": "assistant",
+                        "content": f"**Error:** {error_msg}",
+                        "type": "error",
+                        "timestamp": datetime.now().isoformat()
+                    })
+                    st.error(error_msg)
+                    st.info("Please check your API keys and database configuration.")
+
+# Footer
+st.markdown("---")
 st.markdown("""
-<style>
-    .main-header {
-        font-size: 2.5rem;
-        font-weight: bold;
-        color: #1f77b4;
-        text-align: center;
-        margin-bottom: 2rem;
-    }
-    
-    .chat-message {
-        padding: 1rem;
-        border-radius: 0.5rem;
-        margin: 0.5rem 0;
-        border-left: 4px solid #1f77b4;
-    }
-    
-    .user-message {
-        background-color: #e8f4fd;
-        border-left-color: #1f77b4;
-    }
-    
-    .assistant-message {
-        background-color: #f0f2f6;
-        border-left-color: #ff7f0e;
-    }
-    
-    .error-message {
-        background-color: #ffe6e6;
-        border-left-color: #d62728;
-    }
-    
-    .success-message {
-        background-color: #e6ffe6;
-        border-left-color: #2ca02c;
-    }
-    
-    .changeset-display {
-        background-color: #f8f9fa;
-        padding: 1rem;
-        border-radius: 0.5rem;
-        border: 1px solid #dee2e6;
-        font-family: monospace;
-        font-size: 0.9rem;
-    }
-</style>
+<div style='text-align: center; color: #666; font-size: 0.8em;'>
+    🚀 Enterprise Form Management Agent • Powered by OpenAI Agents SDK • Built with Streamlit
+</div>
 """, unsafe_allow_html=True)
 
-def initialize_session_state():
-    """Initialize session state variables"""
-    if "messages" not in st.session_state:
-        st.session_state.messages = []
-    
-    if "master_agent" not in st.session_state:
-        st.session_state.master_agent = None
-    
-    if "agent_initialized" not in st.session_state:
-        st.session_state.agent_initialized = False
-    
-    if "session_id" not in st.session_state:
-        import uuid
-        st.session_state.session_id = f"streamlit_{uuid.uuid4().hex[:8]}"
-
-def initialize_agent(model: str, db_path: str, verbose_logging: bool = False) -> bool:
-    """Initialize the master agent"""
-    try:
-        with st.spinner("Initializing agent system..."):
-            st.session_state.master_agent = create_master_agent(
-                model=model,
-                db_path=db_path,
-                verbose_logging=verbose_logging,
-                session_id=st.session_state.session_id
-            )
-            st.session_state.agent_initialized = True
-            st.success(" Agent system initialized successfully!")
-            return True
-    except Exception as e:
-        st.error(f"L Failed to initialize agent system: {str(e)}")
-        st.session_state.agent_initialized = False
-        return False
-
-def display_message(role: str, content: str, message_type: str = "normal"):
-    """Display a chat message with appropriate styling"""
-    timestamp = datetime.now().strftime("%H:%M:%S")
-    
-    if role == "user":
-        css_class = "chat-message user-message"
-        icon = "=d"
-    else:
-        if message_type == "error":
-            css_class = "chat-message error-message"
-            icon = "L"
-        elif message_type == "success":
-            css_class = "chat-message success-message"
-            icon = ""
-        else:
-            css_class = "chat-message assistant-message"
-            icon = ">"
-    
-    st.markdown(f"""
-    <div class="{css_class}">
-        <strong>{icon} {role.title()} ({timestamp})</strong><br>
-        {content}
-    </div>
-    """, unsafe_allow_html=True)
-
-def format_changeset_display(changeset: Dict[str, Any]) -> str:
-    """Format changeset for better display"""
-    try:
-        return f"""
-```json
-{json.dumps(changeset, indent=2)}
-```
-"""
-    except Exception:
-        return f"```\n{str(changeset)}\n```"
-
-def process_user_query(query: str) -> Dict[str, Any]:
-    """Process user query through the master agent"""
-    try:
-        # Fix for Streamlit: create new event loop if none exists
-        import asyncio
-        try:
-            loop = asyncio.get_event_loop()
-        except RuntimeError:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-        
-        # Process the query - session memory will handle conversation history automatically
-        result = st.session_state.master_agent.process_query(query)
-        return result
-    except Exception as e:
-        return {
-            "error": f"Failed to process query: {str(e)}",
-            "traceback": traceback.format_exc()
+# Show current state in expander (for debugging)
+if st.sidebar.checkbox("🐛 Debug Mode", value=False):
+    with st.expander("Debug Information", expanded=False):
+        debug_info = {
+            "total_messages": len(st.session_state.messages),
+            "model": model_provider,
+            "db_path": db_path,
+            "session_id": st.session_state.session_id,
+            "agent_initialized": st.session_state.agent is not None,
+            "verbose_logging": verbose_logging
         }
-
-def main():
-    """Main Streamlit app"""
-    # Initialize session state
-    initialize_session_state()
-    
-    # Header
-    st.markdown('<div class="main-header">> Enterprise Form Management Chatbot</div>', 
-                unsafe_allow_html=True)
-    
-    # Sidebar for configuration
-    with st.sidebar:
-        st.header("� Configuration")
         
-        # Model selection
-        model = st.selectbox(
-            "Select AI Model",
-            ["gpt-4o", "gpt-4", "gpt-3.5-turbo"],
-            index=0,
-            help="Choose the AI model for the agent system"
-        )
+        # Add agent status if available
+        if st.session_state.agent:
+            try:
+                debug_info["langfuse_status"] = st.session_state.agent.get_langfuse_status()
+                debug_info["memory_summary"] = st.session_state.agent.get_memory_summary()
+            except:
+                pass
         
-        # Database path
-        db_path = st.text_input(
-            "Database Path",
-            value="data/forms.sqlite",
-            help="Path to the SQLite database file"
-        )
+        st.json(debug_info)
         
-        # Verbose logging
-        verbose_logging = st.checkbox(
-            "Enable Verbose Logging",
-            value=False,
-            help="Enable detailed logging for debugging"
-        )
-        
-        # Initialize/Reinitialize button
-        if st.button("= Initialize Agent System", type="primary"):
-            st.session_state.agent_initialized = False
-            st.session_state.master_agent = None
-            initialize_agent(model, db_path, verbose_logging)
-        
-        # Status indicator
-        if st.session_state.agent_initialized:
-            st.success(" Agent System Ready")
-        else:
-            st.warning("� Agent System Not Initialized")
-        
-        # Separator
-        st.markdown("---")
-        
-        # Clear chat button
-        if st.button("=� Clear Chat History"):
-            st.session_state.messages = []
-            st.rerun()
-        
-        # Example queries
-        st.markdown("### =� Example Queries")
-        example_queries = [
-            "Create a new form for vacation requests with fields for start date, end date, and reason",
-            "Add a priority field to the contact form with options: Low, Medium, High, Urgent",
-            "Update the employment form to require university name when status is Student",
-            "Show me all forms in the database",
-            "Create logic rules to hide certain fields based on user selections"
-        ]
-        
-        for i, example in enumerate(example_queries):
-            if st.button(f"=� Example {i+1}", key=f"example_{i}", help=example):
-                st.session_state.messages.append({"role": "user", "content": example})
-                st.rerun()
-    
-    # Main chat interface
-    st.header("=� Chat Interface")
-    
-    # Auto-initialize agent if not done
-    if not st.session_state.agent_initialized:
-        if initialize_agent(model, db_path, verbose_logging):
-            st.rerun()
-    
-    # Display chat messages
-    chat_container = st.container()
-    
-    with chat_container:
-        for message in st.session_state.messages:
-            display_message(
-                message["role"], 
-                message["content"],
-                message.get("type", "normal")
-            )
-    
-    # User input
-    if st.session_state.agent_initialized:
-        # Use form to handle Enter key properly
-        with st.form(key="chat_form", clear_on_submit=True):
-            user_input = st.text_area(
-                "Enter your message:",
-                placeholder="Ask me to create forms, add fields, modify options, or any other form management task...",
-                height=100,
-                key="user_input"
-            )
-            
-            submit_button = st.form_submit_button("Send 📤", type="primary")
-            
-            if submit_button and user_input.strip():
-                # Add user message
-                st.session_state.messages.append({
-                    "role": "user", 
-                    "content": user_input
-                })
+        if st.session_state.messages:
+            st.subheader("Message History")
+            for i, msg in enumerate(st.session_state.messages):
+                st.text(f"{i}: {msg['role']} - {msg['content'][:100]}...")
                 
-                # Process the query
-                with st.spinner("> Processing your request..."):
-                    result = process_user_query(user_input)
-                
-                # Handle different types of responses
-                if "error" in result:
-                    # Error response
-                    st.session_state.messages.append({
-                        "role": "assistant",
-                        "content": f"**Error:** {result['error']}",
-                        "type": "error"
-                    })
-                elif "changeset" in result:
-                    # Successful changeset
-                    changeset_display = format_changeset_display(result["changeset"])
-                    response_content = f"""
-** Changeset Generated Successfully!**
-
-The following database operations will be performed:
-
-{changeset_display}
-
-*This changeset represents the database modifications needed to fulfill your request.*
-"""
-                    st.session_state.messages.append({
-                        "role": "assistant",
-                        "content": response_content,
-                        "type": "success"
-                    })
-                elif "response" in result:
-                    # Agent response (clarification, analysis, etc.)
-                    st.session_state.messages.append({
-                        "role": "assistant",
-                        "content": result["response"]
-                    })
-                else:
-                    # Unexpected response format
-                    st.session_state.messages.append({
-                        "role": "assistant",
-                        "content": f"**Response:** {json.dumps(result, indent=2)}",
-                        "type": "normal"
-                    })
-                
-                # Rerun to show new messages
-                st.rerun()
-    
-    else:
-        st.warning("� Please initialize the agent system using the sidebar configuration.")
-    
-    # Footer
-    st.markdown("---")
-    st.markdown("""
-    <div style="text-align: center; color: #666; font-size: 0.9rem;">
-        > Enterprise Form Management Chatbot | Powered by OpenAI Agents SDK
-    </div>
-    """, unsafe_allow_html=True)
-
-if __name__ == "__main__":
-    main()
+        # Test Langfuse connection button
+        if st.button("🧪 Test Langfuse Connection"):
+            if st.session_state.agent:
+                try:
+                    langfuse_status = st.session_state.agent.get_langfuse_status()
+                    st.json(langfuse_status)
+                except Exception as e:
+                    st.error(f"Langfuse test failed: {e}")
