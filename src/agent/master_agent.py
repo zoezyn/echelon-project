@@ -52,8 +52,8 @@ class MasterAgent:
             openai_agents_logger = logging.getLogger("openai.agents")
             openai_tracing_logger = logging.getLogger("openai.agents.tracing")
             
-            openai_agents_logger.setLevel(logging.DEBUG)
-            openai_tracing_logger.setLevel(logging.DEBUG)
+            openai_agents_logger.setLevel(logging.INFO)
+            openai_tracing_logger.setLevel(logging.INFO)
 
         # Initialize subagents
         self.clarification_agent = AskClarificationAgent(model=model)

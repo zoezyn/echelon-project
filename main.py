@@ -38,10 +38,6 @@ def print_banner():
     print("• Create new forms with validation")
     print("• Add dropdown options and logic rules")
     print("• Generate precise database changesets")
-    print()
-    print("Type 'help' for commands, 'quit' to exit")
-    print("💡 Real-time file logging ENABLED - all agent reasoning saved to timestamped files")
-    print("💡 Use 'files' command to see log file locations and tail command")
     print("-" * 70)
 
 def print_help():
