@@ -76,7 +76,7 @@ streamlit run streamlit_app.py
 ## Key Design Decisions
 
 <div align="center">
-  <img src="data/workflow.png" alt="Workflow Architecture" width="250"/>
+  <img src="data/workflow.png" alt="Workflow Architecture" width="400"/>
 </div>
 
 ### 1. **Architecture Framework**
