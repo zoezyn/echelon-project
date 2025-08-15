@@ -17,9 +17,7 @@ from .ask_clarification_agent import AskClarificationAgent
 from .database_context_agent import DatabaseContextAgent
 from .validator_agent import ValidatorAgent
 from .context_memory import ContextMemory
-from ..utils.logger import get_agent_logger, log_json_pretty
-from ..utils.langfuse_config import setup_langfuse_logging, get_langfuse_client, create_trace, check_langfuse_status
-
+from ..utils.langfuse_config import setup_langfuse_logging, get_langfuse_client, check_langfuse_status
 
 class MasterAgent:
     """
@@ -37,34 +35,14 @@ class MasterAgent:
         
         # Initialize session for conversation memory
         self.session = SQLiteSession(self.session_id, "agent_conversations.db")
-        
-        # Initialize logging first
-        self.logger = get_agent_logger("MasterAgent", "DEBUG")
-        
+
         # Setup Langfuse observability
         self.langfuse_enabled = setup_langfuse_logging(f"enterprise_form_agent_{self.session_id}")
         self.langfuse_client = get_langfuse_client() if self.langfuse_enabled else None
-        
-        if self.langfuse_enabled:
-            self.logger.log_step("Langfuse observability enabled", {
-                "session_id": self.session_id,
-                "status": check_langfuse_status()
-            })
-        else:
-            self.logger.log_step("Langfuse observability not available", {
-                "reason": "Missing credentials or dependencies"
-            })
-        
+
         # Load database schema
         schema_path = os.path.join(os.path.dirname(db_path), "database_schema.json")
         self.db_schema = self._load_database_schema(schema_path)
-        self.logger.log_step("Initializing MasterAgent", {
-            "model": model,
-            "db_path": db_path,
-            "schema_loaded": bool(self.db_schema),
-            "verbose_logging": verbose_logging,
-            "langfuse_enabled": self.langfuse_enabled
-        })
         
         # Enable OpenAI Agents SDK verbose logging
         if verbose_logging:
@@ -74,18 +52,15 @@ class MasterAgent:
             openai_agents_logger = logging.getLogger("openai.agents")
             openai_tracing_logger = logging.getLogger("openai.agents.tracing")
             
-            openai_agents_logger.setLevel(logging.INFO)
-            openai_tracing_logger.setLevel(logging.INFO)
-            
-        
+            openai_agents_logger.setLevel(logging.DEBUG)
+            openai_tracing_logger.setLevel(logging.DEBUG)
+
         # Initialize subagents
         self.clarification_agent = AskClarificationAgent(model=model)
         self.db_context_agent = DatabaseContextAgent(model=model, db_path=db_path)
         self.validator_agent = ValidatorAgent(model=model, db_path=db_path)
         self.context_memory = ContextMemory()
-        
-        self.logger.log_step("Subagents initialized successfully")
-        
+
         # Create function tools and use agents as tools
         function_tools = self._create_function_tools()
         agent_tools = self._create_agent_tools()
@@ -97,31 +72,17 @@ class MasterAgent:
             instructions=self._get_instructions(),
             tools=function_tools + agent_tools
         )
-        
-        self.logger.log_step("MasterAgent initialized", {
-            "total_tools": len(function_tools + agent_tools),
-            "function_tools": len(function_tools),
-            "agent_tools": len(agent_tools)
-        })
-    
+
     def _load_database_schema(self, schema_path: str) -> Dict:
         """Load database schema from JSON file"""
         try:
             if os.path.exists(schema_path):
                 with open(schema_path, 'r') as f:
                     schema = json.load(f)
-                self.logger.log_step("Database schema loaded successfully", {
-                    "schema_path": schema_path,
-                    "table_count": len(schema.get("tables", {}))
-                })
                 return schema
             else:
-                self.logger.log_step("Database schema file not found", {
-                    "schema_path": schema_path
-                })
                 return {}
         except Exception as e:
-            self.logger.log_error(e, "Failed to load database schema")
             return {}
         
     def _get_instructions(self):
@@ -281,7 +242,6 @@ Always output valid JSON in this exact structure:
 
 """
 
-
     def _create_function_tools(self) -> List:
         """Create function tools for context management"""
         
@@ -294,41 +254,18 @@ Always output valid JSON in this exact structure:
                 value: JSON string of the context value to store
                 category: Context category for organization
             """
-            self.logger.log_tool_call("store_context", {
-                "key": key,
-                "category": category,
-                "value_length": len(value) if value else 0
-            })
-            
             try:
-                self.logger.log_thinking(f"Attempting to parse and store context for key '{key}'")
                 value_dict = json.loads(value) if value else {}
-                
-                self.logger.log_step("Parsed JSON value successfully", {
-                    "parsed_type": type(value_dict).__name__,
-                    "has_content": bool(value_dict)
-                })
-                
                 success = self.context_memory.store_context(key, value_dict, category)
                 
                 if success:
-                    result = f"Context stored successfully in {category} category"
-                    self.logger.log_tool_result("store_context", result)
-                    return result
+                    return f"Context stored successfully in {category} category"
                 else:
-                    error_result = "Failed to store context"
-                    self.logger.log_tool_result("store_context", error_result)
-                    return error_result
+                    return "Failed to store context"
             except json.JSONDecodeError as e:
-                error_result = f"Error parsing JSON value: {str(e)}"
-                self.logger.log_error(e, "store_context JSON parsing")
-                self.logger.log_tool_result("store_context", error_result)
-                return error_result
+                return f"Error parsing JSON value: {str(e)}"
             except Exception as e:
-                error_result = f"Error storing context: {str(e)}"
-                self.logger.log_error(e, "store_context")
-                self.logger.log_tool_result("store_context", error_result)
-                return error_result
+                return f"Error storing context: {str(e)}"
 
         @function_tool  
         def retrieve_context(key: str, category: str = "general") -> str:
@@ -338,46 +275,21 @@ Always output valid JSON in this exact structure:
                 key: Context key to retrieve
                 category: Context category to search in
             """
-            self.logger.log_tool_call("retrieve_context", {
-                "key": key,
-                "category": category
-            })
-            
             try:
-                self.logger.log_thinking(f"Searching for context key '{key}' in category '{category}'")
                 value = self.context_memory.get_context(key, category=category)
                 
                 if value:
-                    self.logger.log_step("Context found successfully", {
-                        "found": True,
-                        "value_type": type(value).__name__
-                    })
-                    
-                    result = json.dumps(value, indent=2)
-                    self.logger.log_tool_result("retrieve_context", f"Found context with {len(result)} characters")
-                    return result
+                    return json.dumps(value, indent=2)
                 else:
-                    result = f"No context found for key '{key}' in category '{category}'"
-                    self.logger.log_step("Context not found", {
-                        "found": False,
-                        "key": key,
-                        "category": category
-                    })
-                    self.logger.log_tool_result("retrieve_context", result)
-                    return result
+                    return f"No context found for key '{key}' in category '{category}'"
             except Exception as e:
-                error_result = f"Error retrieving context: {str(e)}"
-                self.logger.log_error(e, "retrieve_context")
-                self.logger.log_tool_result("retrieve_context", error_result)
-                return error_result
+                return f"Error retrieving context: {str(e)}"
 
         return [store_context, retrieve_context]
     
     def _create_agent_tools(self) -> List:
         """Create agent tools using custom Runner.run implementation"""
-        
-        self.logger.log_step("Creating agent tools using custom Runner.run pattern")
-        
+
         @function_tool
         async def ask_clarification(user_query: str) -> str:
             """Generate clarification questions when the user query is ambiguous or missing critical details
@@ -404,9 +316,6 @@ Always output valid JSON in this exact structure:
                 exploration_request: Detailed description of what database information is needed
             """
             try:
-                self.logger.log_step("Running database context agent", {
-                    "exploration_request": exploration_request
-                })
                 result = await Runner.run(
                     self.db_context_agent.agent,
                     input=exploration_request,
@@ -434,42 +343,8 @@ Always output valid JSON in this exact structure:
         # Generate unique query ID for tracking
         query_id = str(uuid.uuid4())
         
-        # Create Langfuse trace for this query
-        langfuse_trace = None
-        if self.langfuse_enabled and self.langfuse_client:
-            try:
-                langfuse_trace = create_trace(
-                    name="enterprise_form_agent_query",
-                    session_id=self.session_id,
-                    user_id=user_context.get("user_id") if user_context else None,
-                    metadata={
-                        "query_id": query_id,
-                        "model": self.model,
-                        "db_path": self.db_path,
-                        "user_context": user_context
-                    }
-                )
-                if langfuse_trace:
-                    langfuse_trace.update(
-                        input=user_query,
-                        metadata={"query_start": True}
-                    )
-                    # Flush to ensure trace is established
-                    if self.langfuse_client:
-                        self.langfuse_client.flush()
-            except Exception as e:
-                pass  # Silently handle trace creation errors
-        
-        # Log query start
-        self.logger.log_query_start(user_query, user_context)
-        self.logger.log_thinking("Starting query analysis and planning...")
-        
         try:
             # Store the original query
-            self.logger.log_step("Storing query in context memory", {
-                "query_id": query_id
-            })
-            
             self.context_memory.store_context("original_query", {
                 "query": user_query,
                 "context": user_context,
@@ -481,70 +356,33 @@ Always output valid JSON in this exact structure:
             
             if user_context:
                 message += f"\n\nAdditional context: {json.dumps(user_context, indent=2)}"
-                self.logger.log_step("Added user context to message")
-            
-            self.logger.log_thinking("Preparing message for LLM agent...")
-            log_json_pretty(self.logger, "MESSAGE TO AGENT", {"message": message}, "DEBUG")
             
             # Use the OpenAI Agents SDK Runner to process the message with session memory
-            self.logger.log_step("Calling Runner.run_sync with agent and session", {
-                "agent_name": self.agent.name,
-                "model": self.model,
-                "session_id": self.session_id
-            })
             
             result = Runner.run_sync(
                 self.agent,
                 input=message,
                 session=self.session
             )
-            
-            # Log detailed result structure for debugging
-            result_attrs = [attr for attr in dir(result) if not attr.startswith('_')]
-            self.logger.log_step("Received result from agent", {
-                "has_final_output": hasattr(result, 'final_output') and bool(result.final_output),
-                "has_messages": hasattr(result, 'messages') and bool(result.messages),
-                "result_type": type(result).__name__,
-                "available_attributes": result_attrs
-            })
-            
-            # Log result details for debugging
-            if hasattr(result, 'messages'):
-                self.logger.log_step("Result messages details", {
-                    "message_count": len(result.messages) if result.messages else 0,
-                    "message_types": [type(msg).__name__ for msg in (result.messages or [])]
-                })
-            
+
             # Extract the result - the agents SDK provides final_output
             if hasattr(result, 'final_output') and result.final_output:
                 content = str(result.final_output)
-                
-                self.logger.log_thinking("Processing agent response...")
-                log_json_pretty(self.logger, "AGENT RESPONSE", {"content": content}, "DEBUG")
-                
+
                 # Try to parse as JSON changeset
                 try:
-                    self.logger.log_step("Attempting to parse JSON changeset from response")
                     import re
                     json_pattern = r'\{[^}]*(?:\{[^}]*\}[^}]*)*\}'
                     json_matches = re.findall(json_pattern, content, re.DOTALL)
                     
-                    self.logger.log_step("Found potential JSON matches", {
-                        "match_count": len(json_matches)
-                    })
-                    
                     for i, match in enumerate(json_matches):
                         try:
-                            self.logger.log_step(f"Attempting to parse JSON match {i+1}")
                             changeset = json.loads(match)
                             
                             # Validate it looks like a proper changeset
                             is_changeset = any(key in changeset for key in ['insert', 'update', 'delete']) or any(isinstance(v, dict) and any(op in v for op in ['insert', 'update', 'delete']) for v in changeset.values())
                             
                             if is_changeset:
-                                self.logger.log_step("Valid changeset found!", {
-                                    "changeset_tables": list(changeset.keys())
-                                })
                                 
                                 result_dict = {
                                     "success": True,
@@ -552,110 +390,32 @@ Always output valid JSON in this exact structure:
                                     "query_id": query_id
                                 }
                                 
-                                # Log successful completion to Langfuse
-                                if langfuse_trace:
-                                    try:
-                                        langfuse_trace.update(
-                                            output=result_dict,
-                                            metadata={
-                                                "success": True,
-                                                "result_type": "changeset",
-                                                "query_id": query_id
-                                            }
-                                        )
-                                        # Flush to ensure data is sent
-                                        if self.langfuse_client:
-                                            self.langfuse_client.flush()
-                                    except Exception as e:
-                                        pass  # Silently handle trace errors
-                                
-                                self.logger.log_query_end(result_dict, True)
                                 return result_dict
                             else:
-                                self.logger.log_step(f"JSON match {i+1} is not a valid changeset")
+                                pass  # Not a valid changeset, continue
                         except json.JSONDecodeError as e:
-                            self.logger.log_step(f"JSON match {i+1} failed to parse", {
-                                "error": str(e)
-                            })
                             continue
                             
                 except Exception as e:
-                    self.logger.log_error(e, "JSON parsing")
+                    pass  # Silently handle JSON parsing errors
                 
                 # Return the response content
-                self.logger.log_thinking("No valid changeset found, returning raw response")
                 result_dict = {
                     "response": content,
                     "query_id": query_id,
                     "message": "Agent response - may contain clarification questions or analysis"
                 }
                 
-                # Log response completion to Langfuse
-                if langfuse_trace:
-                    try:
-                        langfuse_trace.update(
-                            output=result_dict,
-                            metadata={
-                                "success": True,
-                                "result_type": "response",
-                                "query_id": query_id
-                            }
-                        )
-                        # Flush to ensure data is sent
-                        if self.langfuse_client:
-                            self.langfuse_client.flush()
-                    except Exception as e:
-                        pass  # Silently handle trace errors
-                
-                self.logger.log_query_end(result_dict, True)
                 return result_dict
                 
             else:
                 error_dict = {"error": "No response received from agent"}
                 
-                # Log error to Langfuse
-                if langfuse_trace:
-                    try:
-                        langfuse_trace.update(
-                            output=error_dict,
-                            metadata={
-                                "success": False,
-                                "error_type": "no_response",
-                                "query_id": query_id
-                            }
-                        )
-                        # Flush to ensure data is sent
-                        if self.langfuse_client:
-                            self.langfuse_client.flush()
-                    except Exception as e:
-                        pass  # Silently handle trace errors
-                
-                self.logger.log_query_end(error_dict, False)
                 return error_dict
             
         except Exception as e:
-            self.logger.log_error(e, "process_query")
             error_dict = {"error": f"Query processing failed: {str(e)}"}
             
-            # Log exception to Langfuse
-            if langfuse_trace:
-                try:
-                    langfuse_trace.update(
-                        output=error_dict,
-                        metadata={
-                            "success": False,
-                            "error_type": "exception",
-                            "exception": str(e),
-                            "query_id": query_id
-                        }
-                    )
-                    # Flush to ensure data is sent
-                    if self.langfuse_client:
-                        self.langfuse_client.flush()
-                except Exception as trace_error:
-                    pass  # Silently handle trace errors
-            
-            self.logger.log_query_end(error_dict, False)
             return error_dict
 
     def handle_clarification_response(self, query_id: str, answers: List[str]) -> Dict:
@@ -669,33 +429,17 @@ Always output valid JSON in this exact structure:
         Returns:
             Updated processing result with the additional context
         """
-        self.logger.log_step("Handling clarification response", {
-            "query_id": query_id,
-            "answer_count": len(answers)
-        })
-        
         try:
             # Get the original clarification Q&A
-            self.logger.log_thinking("Retrieving original clarification data...")
             qa_data = self.context_memory.get_clarification_qa(query_id)
             
             if not qa_data:
-                error_result = {"error": "Original query not found"}
-                self.logger.log_step("Original query not found in memory", {
-                    "query_id": query_id
-                })
-                return error_result
-            
-            self.logger.log_step("Found original clarification data", {
-                "original_question_count": len(qa_data.get("questions", []))
-            })
+                return {"error": "Original query not found"}
             
             # Update with answers
             qa_data["answers"] = answers
             qa_data["status"] = "answered"
             self.context_memory.store_clarification_qa(query_id, qa_data)
-            
-            self.logger.log_step("Updated clarification data with answers")
             
             # Build enriched context
             enriched_context = {
@@ -706,16 +450,10 @@ Always output valid JSON in this exact structure:
                 ]
             }
             
-            log_json_pretty(self.logger, "ENRICHED CONTEXT", enriched_context, "DEBUG")
-            
             # Reprocess the original query with enriched context
-            self.logger.log_thinking("Reprocessing original query with clarification answers...")
-            self.logger.log_agent_handoff("MasterAgent", "MasterAgent", "Reprocessing with clarifications")
-            
             return self.process_query(qa_data["original_query"], enriched_context)
             
         except Exception as e:
-            self.logger.log_error(e, "handle_clarification_response")
             return {"error": f"Failed to handle clarification response: {str(e)}"}
 
     def get_memory_summary(self) -> Dict:
@@ -749,25 +487,16 @@ Always output valid JSON in this exact structure:
             bool: True if feedback was logged successfully
         """
         if not self.langfuse_enabled or not self.langfuse_client:
-            self.logger.log_step("Cannot log user feedback - Langfuse not available")
             return False
         
         try:
             from ..utils.langfuse_config import log_user_feedback
             log_user_feedback(query_id, score, comment)
-            self.logger.log_step("User feedback logged", {
-                "query_id": query_id,
-                "score": score,
-                "comment": comment
-            })
+            # Flush to ensure feedback is sent
+            self.langfuse_client.flush()
             return True
         except Exception as e:
-            self.logger.log_step("Failed to log user feedback", {
-                "query_id": query_id,
-                "error": str(e)
-            })
             return False
-
 
 def create_master_agent(model="gpt-4", db_path="data/forms.sqlite", verbose_logging=True, session_id=None) -> MasterAgent:
     """Factory function to create a configured master LLM agent"""

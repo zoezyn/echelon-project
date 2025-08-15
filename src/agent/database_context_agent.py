@@ -11,7 +11,6 @@ from difflib import SequenceMatcher
 from typing import Dict, List, Optional, Any
 from agents import Agent, function_tool, Runner
 
-
 class DatabaseContextAgent:
     """
     LLM-powered agent that explores database structure and content
@@ -81,7 +80,6 @@ When asked to explore form creation, you MUST examine ALL these tables:
 5. **option_sets** - for dropdown field choices
 6. **option_items** - individual dropdown options  
 7. **field_option_binding** - how fields connect to option sets
-
 
 ## Available Tools
 
@@ -171,7 +169,6 @@ For schema exploration requests, you MUST return this exact structure:
 ```
 
 DO NOT abbreviate, filter, or summarize the schema information. Return the complete output from get_db_schema tool for the requested tables.
-
 
 """
 

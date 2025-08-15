@@ -244,11 +244,7 @@ def main():
                 continue
             
             # Process query with agent
-            if show_logs:
-                print("🤖 Agent: Processing your request (detailed logging enabled)...")
-                print("═" * 60)
-            else:
-                print("🤖 Agent: Processing your request...")
+            print("🤖 Agent: Processing your request...")
             
             try:
                 # Set logging level based on settings

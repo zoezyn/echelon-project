@@ -9,8 +9,6 @@ import json
 import uuid
 from datetime import datetime
 from typing import Dict, List, Optional, Any, Union
-from ..utils.logger import get_agent_logger
-
 
 class ContextMemory:
     """
@@ -29,14 +27,7 @@ class ContextMemory:
         self.memory = {}
         self.session_id = str(uuid.uuid4())
         self.created_at = datetime.now().isoformat()
-        
-        # Initialize logging
-        self.logger = get_agent_logger("ContextMemory", "DEBUG")
-        self.logger.log_step("Initializing ContextMemory", {
-            "session_id": self.session_id,
-            "created_at": self.created_at
-        })
-        
+
     def store_context(self, key: str, value: Any, category: str = "general") -> bool:
         """
         Store context information with optional categorization
@@ -50,15 +41,8 @@ class ContextMemory:
             True if successful, False otherwise
         """
         try:
-            self.logger.log_step(f"Storing context in {category}", {
-                "key": key,
-                "category": category,
-                "value_type": type(value).__name__
-            })
-            
             if category not in self.memory:
                 self.memory[category] = {}
-                self.logger.log_step(f"Created new category: {category}")
             
             self.memory[category][key] = {
                 "value": value,
@@ -66,14 +50,8 @@ class ContextMemory:
                 "session_id": self.session_id
             }
             
-            self.logger.log_step("Context stored successfully", {
-                "total_categories": len(self.memory),
-                "items_in_category": len(self.memory[category])
-            })
-            
             return True
         except Exception as e:
-            self.logger.log_error(e, f"store_context({key}, {category})")
             return False
     
     def get_context(self, key: str, default: Any = None, category: str = "general") -> Any:

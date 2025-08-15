@@ -8,8 +8,6 @@ precise database operations.
 
 from typing import Dict, List, Optional, Any
 from agents import Agent, Runner
-from ..utils.logger import get_agent_logger, log_json_pretty
-
 
 class AskClarificationAgent:
     """
@@ -22,20 +20,14 @@ class AskClarificationAgent:
     
     def __init__(self, model="gpt-4"):
         self.model = model
-        
-        # Initialize logging
-        self.logger = get_agent_logger("AskClarificationAgent", "DEBUG")
-        self.logger.log_step("Initializing AskClarificationAgent", {"model": model})
-        
+
         self.agent = Agent(
             name="AskClarificationAgent",
             model=model,
             instructions=self._get_instructions(),
             tools=[]  # This agent doesn't need external tools, just reasoning
         )
-        
-        self.logger.log_step("AskClarificationAgent initialized successfully")
-        
+
     def _get_instructions(self):
         return """# Ask Clarification Agent
 

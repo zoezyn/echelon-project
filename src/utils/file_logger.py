@@ -30,12 +30,7 @@ class FileLoggingManager:
         
         # Store original handlers
         self.original_handlers = {}
-        
-        print(f"📁 Logging session: {self.session_dir}")
-        print(f"   SDK logs: {self.sdk_log_file}")
-        print(f"   Custom logs: {self.custom_log_file}")
-        print(f"   Combined: {self.combined_log_file}")
-        print()
+
     
     def setup_sdk_file_logging(self):
         """Setup file logging for OpenAI Agents SDK"""
@@ -71,40 +66,29 @@ class FileLoggingManager:
             logger.addHandler(combined_handler)
     
     def setup_custom_file_logging(self):
-        """Setup file logging for our custom agent loggers"""
-        # Get all our custom loggers
-        custom_logger_names = [
-            "MasterAgent",
-            "ValidatorAgent", 
-            "AskClarificationAgent",
-            "ContextMemory"
-        ]
+        """Setup file logging for all loggers at DEBUG level"""
+        # Capture all logging at DEBUG level to session files
+        root_logger = logging.getLogger()
         
-        for logger_name in custom_logger_names:
-            logger = logging.getLogger(logger_name)
-            
-            # Store original handlers
-            if logger_name not in self.original_handlers:
-                self.original_handlers[logger_name] = logger.handlers.copy()
-            
-            # Create file handler for custom logs
-            custom_file_handler = logging.FileHandler(self.custom_log_file, mode='a')
-            custom_file_handler.setLevel(logging.DEBUG)
-            
-            # Create formatter
-            custom_formatter = logging.Formatter(
-                '%(asctime)s | %(name)s | %(levelname)s | %(message)s'
-            )
-            custom_file_handler.setFormatter(custom_formatter)
-            
-            # Add file handler
-            logger.addHandler(custom_file_handler)
-            
-            # Also add to combined log
-            combined_handler = logging.FileHandler(self.combined_log_file, mode='a')
-            combined_handler.setLevel(logging.DEBUG)
-            combined_handler.setFormatter(custom_formatter)
-            logger.addHandler(combined_handler)
+        # Store original handlers
+        self.original_handlers['root'] = root_logger.handlers.copy()
+        
+        # Add file handler to capture all logging to combined log
+        combined_file_handler = logging.FileHandler(self.combined_log_file, mode='a')
+        combined_file_handler.setLevel(logging.DEBUG)
+        
+        # Create formatter
+        formatter = logging.Formatter(
+            '%(asctime)s | %(name)s | %(levelname)s | %(message)s'
+        )
+        combined_file_handler.setFormatter(formatter)
+        
+        # Add handler to root logger to capture everything
+        root_logger.addHandler(combined_file_handler)
+        
+        # Set root logger to DEBUG level to capture all messages
+        if root_logger.level > logging.DEBUG:
+            root_logger.setLevel(logging.DEBUG)
     
     def setup_console_minimal_logging(self):
         """Setup minimal console logging - only show important messages"""
@@ -165,10 +149,6 @@ Session ID: {self.session_timestamp}
         for log_file in [self.sdk_log_file, self.custom_log_file, self.combined_log_file]:
             with open(log_file, 'a') as f:
                 f.write(header)
-        
-        print("✅ File logging setup complete!")
-        print(f"📝 Follow logs in real-time with: tail -f {self.combined_log_file}")
-        print()
     
     def cleanup(self):
         """Restore original logging configuration"""

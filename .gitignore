@@ -21,3 +21,4 @@ test_run.py
 database_schema*
 database_context.md
 *.log
+*logs

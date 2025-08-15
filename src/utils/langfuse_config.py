@@ -9,6 +9,8 @@ import os
 import logging
 from typing import Optional, Dict, Any
 from dotenv import load_dotenv
+from langfuse import Langfuse
+import logfire
 
 # Load environment variables
 load_dotenv()
@@ -49,8 +51,6 @@ def setup_langfuse_logging(service_name: str = "enterprise_form_agent") -> bool:
         
         # Import and configure logfire (OpenTelemetry wrapper)
         try:
-            import logfire
-            
             # Configure logfire with Langfuse
             logfire.configure(
                 service_name=service_name,
@@ -84,8 +84,7 @@ def get_langfuse_client():
         Langfuse client or None if not available
     """
     try:
-        from langfuse import Langfuse
-        
+
         public_key = os.getenv("LANGFUSE_PUBLIC_KEY")
         secret_key = os.getenv("LANGFUSE_SECRET_KEY")
         host = os.getenv("LANGFUSE_HOST", "https://cloud.langfuse.com")
@@ -98,8 +97,6 @@ def get_langfuse_client():
             secret_key=secret_key,
             host=host
         )
-
-        
         return client
         
     except ImportError:
@@ -130,33 +127,6 @@ def log_user_feedback(trace_id: str, score: float, comment: Optional[str] = None
             logging.info(f"User feedback logged for trace {trace_id}: {score}")
         except Exception as e:
             logging.error(f"Failed to log user feedback: {e}")
-
-def create_trace(name: str, session_id: Optional[str] = None, user_id: Optional[str] = None, metadata: Optional[Dict[str, Any]] = None):
-    """
-    Create a manual trace for custom logging
-    
-    Args:
-        name: Name of the trace
-        session_id: Optional session ID
-        user_id: Optional user ID
-        metadata: Optional metadata dictionary
-        
-    Returns:
-        Trace object or None
-    """
-    client = get_langfuse_client()
-    if client:
-        try:
-            trace = client.trace(
-                name=name,
-                session_id=session_id,
-                user_id=user_id,
-                metadata=metadata or {}
-            )
-            return trace
-        except Exception as e:
-            logging.error(f"Failed to create trace: {e}")
-    return None
 
 def log_generation(trace_id: str, name: str, input_data: Any, output_data: Any, model: str, metadata: Optional[Dict[str, Any]] = None):
     """
@@ -216,7 +186,6 @@ def check_langfuse_status() -> Dict[str, Any]:
     
     # Check logfire
     try:
-        import logfire
         status["logfire_available"] = True
     except ImportError:
         pass

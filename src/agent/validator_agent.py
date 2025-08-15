@@ -13,8 +13,6 @@ import shutil
 import uuid
 from typing import Dict, List, Optional, Any
 from agents import Agent, function_tool
-from ..utils.logger import get_agent_logger, log_json_pretty
-
 
 class ValidatorAgent:
     """
@@ -30,16 +28,8 @@ class ValidatorAgent:
         self.temp_db_path = None
         self.model = model
         
-        # Initialize logging
-        self.logger = get_agent_logger("ValidatorAgent", "DEBUG")
-        self.logger.log_step("Initializing ValidatorAgent", {
-            "model": model,
-            "db_path": db_path
-        })
-        
         # Create function tools
         self.tools = self._create_tools()
-        self.logger.log_step(f"Created {len(self.tools)} validation tools")
         
         self.agent = Agent(
             name="ValidatorAgent",
@@ -47,8 +37,6 @@ class ValidatorAgent:
             instructions=self._get_instructions(),
             tools=self.tools
         )
-        
-        self.logger.log_step("ValidatorAgent initialized successfully")
         
     def _get_instructions(self):
         return """# Validator Agent
@@ -222,22 +210,13 @@ When validation fails, provide specific suggestions for how to fix the issues.""
         ]
 
     def create_temp_database(self) -> Dict:
-        """Create a temporary copy of the database for testing"""
-        self.logger.log_step("Creating temporary database for validation")
-        
+        """Create a temporary copy of the database for testing"""        
         try:
-            # Create temporary file
-            self.logger.log_thinking("Creating temporary file...")
+            # Create temporary file            
             temp_fd, self.temp_db_path = tempfile.mkstemp(suffix='.sqlite')
             import os
             os.close(temp_fd)
-            
-            self.logger.log_step("Temporary file created", {
-                "temp_path": self.temp_db_path
-            })
-            
-            # Copy original database to temporary location
-            self.logger.log_thinking(f"Copying database from {self.db_path} to temporary location...")
+            # Copy original database to temporary location            
             shutil.copy2(self.db_path, self.temp_db_path)
             
             # Get file sizes for verification
@@ -249,73 +228,38 @@ When validation fails, provide specific suggestions for how to fix the issues.""
                 "temp_path": self.temp_db_path,
                 "message": "Temporary database created successfully"
             }
-            
-            self.logger.log_step("Database copied successfully", {
-                "original_size": original_size,
-                "temp_size": temp_size,
-                "size_match": original_size == temp_size
-            })
-            
             return result
             
         except Exception as e:
-            self.logger.log_error(e, "create_temp_database")
             return {"success": False, "error": f"Failed to create temp database: {str(e)}"}
 
     def apply_changeset(self, changeset: Dict) -> Dict:
-        """Apply a changeset to the temporary database"""
-        self.logger.log_step("Starting changeset application", {
-            "table_count": len(changeset),
-            "tables": list(changeset.keys())
-        })
-        
+        """Apply a changeset to the temporary database"""        
         if not self.temp_db_path:
-            self.logger.log_thinking("No temporary database exists, creating one...")
             result = self.create_temp_database()
             if not result["success"]:
                 return result
-        
-        log_json_pretty(self.logger, "CHANGESET TO APPLY", changeset, "DEBUG")
-        
         try:
             with sqlite3.connect(self.temp_db_path) as conn:
                 cursor = conn.cursor()
                 applied_operations = []
                 errors = []
-                
-                self.logger.log_step("Connected to temporary database, processing operations...")
-                
                 # Process each table in the changeset
-                for table_name, operations in changeset.items():
-                    self.logger.log_step(f"Processing table: {table_name}", {
-                        "inserts": len(operations.get("insert", [])),
-                        "updates": len(operations.get("update", [])),
-                        "deletes": len(operations.get("delete", []))
-                    })
-                    
+                for table_name, operations in changeset.items():                    
                     # Process INSERT operations
                     for i, record in enumerate(operations.get("insert", [])):
                         try:
-                            self.logger.log_thinking(f"Processing INSERT {i+1} for {table_name}")
                             columns = list(record.keys())
                             values = list(record.values())
                             placeholders = ','.join(['?' for _ in values])
                             
                             query = f"INSERT INTO {table_name} ({','.join(columns)}) VALUES ({placeholders})"
-                            self.logger.log_step(f"Executing INSERT query", {
-                                "table": table_name,
-                                "columns": columns,
-                                "query": query
-                            }, "DEBUG")
-                            
                             cursor.execute(query, values)
                             applied_operations.append({
                                 "operation": "insert",
                                 "table": table_name,
                                 "record": record
                             })
-                            self.logger.log_step(f"INSERT successful for {table_name}")
-                            
                         except Exception as e:
                             error_detail = {
                                 "operation": "insert",
@@ -323,10 +267,7 @@ When validation fails, provide specific suggestions for how to fix the issues.""
                                 "record": record,
                                 "error": str(e)
                             }
-                            errors.append(error_detail)
-                            self.logger.log_error(e, f"INSERT failed for {table_name}")
-                            log_json_pretty(self.logger, "INSERT ERROR DETAILS", error_detail, "ERROR")
-                    
+                            errors.append(error_detail)                    
                     # Process UPDATE operations
                     for record in operations.get("update", []):
                         try:
@@ -690,11 +631,6 @@ When validation fails, provide specific suggestions for how to fix the issues.""
 
     def validate_changeset(self, changeset: Dict) -> Dict:
         """Main validation method - runs comprehensive validation"""
-        self.logger.log_step("Starting comprehensive changeset validation")
-        self.logger.log_thinking("Analyzing changeset structure and preparing validation pipeline...")
-        
-        log_json_pretty(self.logger, "CHANGESET TO VALIDATE", changeset, "INFO")
-        
         try:
             validation_results = {
                 "valid": True,
@@ -703,75 +639,36 @@ When validation fails, provide specific suggestions for how to fix the issues.""
                 "summary": {},
                 "suggestions": []
             }
-            
-            self.logger.log_step("Initialized validation results structure")
-            
             # Create temporary database
-            self.logger.log_step("Creating temporary database for safe validation...")
             temp_result = self.create_temp_database()
             if not temp_result["success"]:
                 error_result = {"valid": False, "error": temp_result["error"]}
-                self.logger.log_step("Temporary database creation failed - aborting validation")
                 return error_result
-            
-            self.logger.log_step("Temporary database created successfully")
-            
             # Generate diff first
-            self.logger.log_step("Generating diff to show what changes would be made...")
             diff_result = self.generate_diff(changeset)
             if diff_result["success"]:
                 validation_results["summary"]["diff"] = diff_result["diff"]
-                self.logger.log_step("Diff generated successfully", {
-                    "total_operations": diff_result["diff"].get("total_operations", 0)
-                })
-            else:
-                self.logger.log_step("Diff generation failed", {"error": diff_result.get("error")})
-            
             # Validate required fields before applying
-            self.logger.log_step("Validating required fields...")
             required_result = self.validate_required_fields(changeset)
             if not required_result["valid"]:
                 validation_results["valid"] = False
                 validation_results["errors"].extend(required_result["errors"])
-                self.logger.log_validation("Required fields", False, {
-                    "error_count": len(required_result["errors"])
-                })
-            else:
-                self.logger.log_validation("Required fields", True)
-            
             # Validate data types
-            self.logger.log_step("Validating data types...")
             type_result = self.validate_data_types(changeset)
             if not type_result["valid"]:
                 validation_results["valid"] = False
                 validation_results["errors"].extend(type_result["errors"])
-                self.logger.log_validation("Data types", False, {
-                    "error_count": len(type_result["errors"])
-                })
-            else:
-                self.logger.log_validation("Data types", True)
-            
             # Apply changeset to temporary database
             if validation_results["valid"]:
-                self.logger.log_step("Pre-validation checks passed - applying changeset to temporary database...")
                 apply_result = self.apply_changeset(changeset)
                 if not apply_result["success"]:
                     validation_results["valid"] = False
                     validation_results["errors"].extend(apply_result["errors"])
-                    self.logger.log_validation("Changeset application", False, {
-                        "error_count": len(apply_result["errors"])
-                    })
                 else:
                     validation_results["summary"]["applied_operations"] = len(apply_result["applied_operations"])
-                    self.logger.log_validation("Changeset application", True, {
-                        "operations_applied": len(apply_result["applied_operations"])
-                    })
                     
                     # Run post-application validations
-                    self.logger.log_step("Running post-application validations...")
-                    
                     # Foreign key validation
-                    self.logger.log_step("Checking foreign key constraints...")
                     fk_result = self.validate_foreign_keys()
                     if not fk_result["valid"]:
                         validation_results["valid"] = False
@@ -779,14 +676,7 @@ When validation fails, provide specific suggestions for how to fix the issues.""
                             "type": "foreign_key_violations",
                             "violations": fk_result["violations"]
                         })
-                        self.logger.log_validation("Foreign key constraints", False, {
-                            "violation_count": len(fk_result["violations"])
-                        })
-                    else:
-                        self.logger.log_validation("Foreign key constraints", True)
-                    
                     # Unique constraint validation
-                    self.logger.log_step("Checking unique constraints...")
                     unique_result = self.validate_unique_constraints()
                     if not unique_result["valid"]:
                         validation_results["valid"] = False
@@ -794,14 +684,7 @@ When validation fails, provide specific suggestions for how to fix the issues.""
                             "type": "unique_constraint_violations", 
                             "violations": unique_result["violations"]
                         })
-                        self.logger.log_validation("Unique constraints", False, {
-                            "violation_count": len(unique_result["violations"])
-                        })
-                    else:
-                        self.logger.log_validation("Unique constraints", True)
-                    
                     # Referential integrity validation
-                    self.logger.log_step("Checking referential integrity...")
                     integrity_result = self.check_referential_integrity()
                     if not integrity_result["valid"]:
                         validation_results["valid"] = False
@@ -809,53 +692,29 @@ When validation fails, provide specific suggestions for how to fix the issues.""
                             "type": "referential_integrity_issues",
                             "issues": integrity_result["issues"]
                         })
-                        self.logger.log_validation("Referential integrity", False, {
-                            "issue_count": len(integrity_result["issues"])
-                        })
-                    else:
-                        self.logger.log_validation("Referential integrity", True)
-            else:
-                self.logger.log_step("Pre-validation checks failed - skipping changeset application")
-            
             # Add suggestions for common issues
             if not validation_results["valid"]:
-                self.logger.log_step("Validation failed - generating suggestions", {
-                    "total_errors": len(validation_results["errors"])
-                })
                 validation_results["suggestions"] = [
                     "Check that all referenced IDs exist in their respective tables",
                     "Ensure required fields are provided for INSERT operations",
                     "Verify data types match the expected schema",
                     "Use placeholder IDs (starting with $) for new records that reference each other"
                 ]
-            else:
-                self.logger.log_step("All validations passed successfully! ✅")
-            
             # Final validation summary
             final_summary = {
                 "total_errors": len(validation_results["errors"]),
                 "total_warnings": len(validation_results["warnings"]),
                 "validation_passed": validation_results["valid"]
             }
-            
-            self.logger.log_step("Validation complete", final_summary)
-            log_json_pretty(self.logger, "VALIDATION RESULTS", validation_results, "INFO")
-            
             # Cleanup
             cleanup_result = self.cleanup_temp_database()
-            self.logger.log_step("Cleanup completed", cleanup_result)
-            
             return validation_results
             
         except Exception as e:
-            self.logger.log_error(e, "validate_changeset")
             # Ensure cleanup even on error
             cleanup_result = self.cleanup_temp_database()
-            self.logger.log_step("Emergency cleanup completed", cleanup_result)
             return {"valid": False, "error": f"Validation failed: {str(e)}"}
         
     def __del__(self):
         """Cleanup on destruction"""
-        if hasattr(self, 'logger'):
-            self.logger.log_step("ValidatorAgent destructor called - cleaning up")
         self.cleanup_temp_database()
